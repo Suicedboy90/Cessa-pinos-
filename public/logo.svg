@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#ffffff"/>
+  <!-- Tablet -->
+  <circle cx="200" cy="300" r="80" fill="#4ade80" />
+  <line x1="160" y1="260" x2="240" y2="340" stroke="#166534" stroke-width="8" stroke-linecap="round"/>
+  <!-- Capsule -->
+  <g transform="translate(320, 200) rotate(45)">
+    <rect x="-40" y="-80" width="80" height="160" rx="40" fill="#3b82f6" />
+    <path d="M-40 0 A 40 40 0 0 1 40 0 L 40 80 A 40 40 0 0 1 -40 80 Z" fill="#93c5fd" />
+  </g>
+</svg>

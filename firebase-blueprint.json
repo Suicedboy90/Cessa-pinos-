@@ -1,0 +1,85 @@
+{
+  "entities": {
+    "Medication": {
+      "title": "Medication",
+      "description": "Catálogo de medicamentos.",
+      "type": "object",
+      "properties": {
+        "num": { "type": "number", "description": "ID autoincremental" },
+        "clave": { "type": "string", "description": "Clave (ej: 010.000.0101.00)" },
+        "nombre": { "type": "string" },
+        "descripcion": { "type": "string" },
+        "presentacion": { "type": "string" },
+        "stock_actual": { "type": "number" },
+        "createdAt": { "type": "string", "format": "timestamp" },
+        "updatedAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["num", "clave", "nombre", "stock_actual", "createdAt", "updatedAt"]
+    },
+    "LogEntry": {
+      "title": "Log Entry",
+      "description": "Bitácora de registro de uso (salidas).",
+      "type": "object",
+      "properties": {
+        "folio": { "type": "string", "description": "No. Consecutivo Híbrido" },
+        "fechaIngreso": { "type": "string" },
+        "fechaEgreso": { "type": "string" },
+        "fechaDesecho": { "type": "string" },
+        "denominacionDistinta": { "type": "string" },
+        "denominacionGenerica": { "type": "string" },
+        "presentacion": { "type": "string" },
+        "cantidad": { "type": "number" },
+        "nombreMedico": { "type": "string" },
+        "cedulaProfesional": { "type": "string" },
+        "domicilio": { "type": "string" },
+        "medicationId": { "type": "string", "description": "ID del medicamento (clave en DB)" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["folio", "fechaIngreso", "fechaEgreso", "cantidad", "medicationId", "createdAt"]
+    },
+    "PatientRecord": {
+      "title": "Patient Record",
+      "description": "Registro de medicamentos entregados a pacientes.",
+      "type": "object",
+      "properties": {
+        "fecha": { "type": "string" },
+        "nombreCompleto": { "type": "string" },
+        "origen": { "type": "string" },
+        "tipoPaciente": { "type": "string" },
+        "medicamento": { "type": "string" },
+        "cantidad": { "type": "number" },
+        "notas": { "type": "string" },
+        "createdAt": { "type": "string", "format": "timestamp" }
+      },
+      "required": ["fecha", "nombreCompleto", "origen", "tipoPaciente", "medicamento", "cantidad", "createdAt"]
+    },
+    "Config": {
+      "title": "Config",
+      "description": "Configuraciones globales (ej: folio consecutivo).",
+      "type": "object",
+      "properties": {
+        "lastFolio": { "type": "number" },
+        "lastMedicationNum": { "type": "number" }
+      },
+      "required": ["lastFolio", "lastMedicationNum"]
+    }
+  },
+  "firestore": {
+    "medications/{medicationId}": {
+      "schema": { "$ref": "#/entities/Medication" },
+      "description": "Lista de medicamentos en inventario."
+    },
+    "logs/{logId}": {
+      "schema": { "$ref": "#/entities/LogEntry" },
+      "description": "Registros de bitácora de uso."
+    },
+    "patientsRegistry/{patientRecordId}": {
+      "schema": { "$ref": "#/entities/PatientRecord" },
+      "description": "Registros de dispensación a pacientes."
+    },
+    "config/{configId}": {
+      "schema": { "$ref": "#/entities/Config" },
+      "description": "Configuraciones globales y autoincrementales."
+    }
+  }
+}
