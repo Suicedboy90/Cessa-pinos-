@@ -7,7 +7,7 @@ import * as xlsx from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Modal from './Modal';
-import { cn, formatDateWithMonthName } from '../lib/utils';
+import { cn, formatDateWithMonthName, getLocalDateString } from '../lib/utils';
 
 export default function Inventory() {
   const [medications, setMedications] = useState<Medication[]>([]);
@@ -32,7 +32,7 @@ export default function Inventory() {
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    const q = query(collection(db, 'medications'), orderBy('num', 'desc'));
+    const q = query(collection(db, 'medications'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const meds: Medication[] = [];
       snapshot.forEach((d) => {
@@ -121,7 +121,7 @@ export default function Inventory() {
     }));
     worksheet['!cols'] = wscols;
 
-    xlsx.writeFile(workbook, `Inventario_Farmacia_${new Date().toISOString().split('T')[0]}.xlsx`);
+    xlsx.writeFile(workbook, `Inventario_Farmacia_${getLocalDateString()}.xlsx`);
   };
 
   const handleExportPDF = () => {
@@ -132,9 +132,9 @@ export default function Inventory() {
     doc.text('Inventario de Medicamentos - Botica CESSA Pinos', pageWidth / 2, 15, { align: 'center' });
     
     doc.setFontSize(11);
-    doc.text(`Reporte de Existencias (${formatDateWithMonthName(new Date().toISOString().split('T')[0])})`, pageWidth / 2, 22, { align: 'center' });
+    doc.text(`Reporte de Existencias (${formatDateWithMonthName(getLocalDateString())})`, pageWidth / 2, 22, { align: 'center' });
 
-    const tableData = medications.map(m => [
+    const tableData = filteredMeds.map(m => [
       m.num,
       m.clave,
       m.nombre,
@@ -164,7 +164,7 @@ export default function Inventory() {
       }
     });
 
-    doc.save(`Inventario_Farmacia_${new Date().toISOString().split('T')[0]}.pdf`);
+    doc.save(`Inventario_Farmacia_${getLocalDateString()}.pdf`);
   };
 
   const resetForm = () => {
@@ -270,17 +270,17 @@ export default function Inventory() {
             </div>
             <input
               type="text"
-              className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+              className="block w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg shadow-sm bg-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-base"
               placeholder="Buscar por clave o nombre..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <div className="w-full sm:w-48">
+          <div className="w-full sm:w-56">
             <select
               value={selectedMonthFilter}
               onChange={(e) => setSelectedMonthFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white text-sm outline-none"
+              className="w-full px-3 py-3 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-base outline-none cursor-pointer"
             >
               <option value="all">Modificados (Todo)</option>
               {availableMonths.map(m => (

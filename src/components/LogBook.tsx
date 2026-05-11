@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, writeBatch, serverTimestamp, increment } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { LogEntry, Medication } from '../types';
 import { Plus, Loader2, Download, Trash2 } from 'lucide-react';
 import Modal from './Modal';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { formatDateWithMonthName } from '../lib/utils';
+import { formatDateWithMonthName, parseLocalDate, getLocalDateString } from '../lib/utils';
+import { PATIENT_TYPES } from '../constants';
 
 export default function LogBook() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -23,7 +24,7 @@ export default function LogBook() {
 
   // All available months in the data
   const availableMonths = Array.from(new Set(logs.map(l => {
-    const date = new Date(l.fechaEgreso);
+    const date = parseLocalDate(l.fechaEgreso);
     return date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
   }))).sort((a, b) => {
     const [monthA, yearA] = a.toLowerCase().split(' ');
@@ -47,14 +48,14 @@ export default function LogBook() {
     
     if (selectedMonthFilter === 'all') return matchesSearch;
     
-    const dateValue = l.fechaEgreso ? new Date(l.fechaEgreso) : new Date();
+    const dateValue = l.fechaEgreso ? parseLocalDate(l.fechaEgreso) : new Date();
     const logMonth = dateValue.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
     return matchesSearch && logMonth === selectedMonthFilter;
   });
 
   // Group logs by month for the UI
   const groupedLogs = filteredLogs.reduce((acc, curr) => {
-    const date = new Date(curr.fechaEgreso);
+    const date = parseLocalDate(curr.fechaEgreso);
     const monthYear = date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
     if (!acc[monthYear]) acc[monthYear] = [];
     acc[monthYear].push(curr);
@@ -92,7 +93,7 @@ export default function LogBook() {
   const [paciente, setPaciente] = useState('');
 
   useEffect(() => {
-    const qLogs = query(collection(db, 'logs'), orderBy('createdAt', 'desc'));
+    const qLogs = query(collection(db, 'logs'), orderBy('fechaEgreso', 'desc'), orderBy('createdAt', 'desc'));
     const unsubLogs = onSnapshot(qLogs, (snapshot) => {
       const parsedLogs: LogEntry[] = [];
       snapshot.forEach(d => parsedLogs.push({ id: d.id, ...d.data() } as LogEntry));
@@ -121,22 +122,19 @@ export default function LogBook() {
       setMedications(parsedMeds);
     });
 
-    const now = new Date().toISOString().split('T')[0];
+    const now = getLocalDateString();
     setFechaEgreso(now);
     setFechaIngreso('');
-    
-    const mNombre = localStorage.getItem('lastNombreMedico');
-    const mCed = localStorage.getItem('lastCedulaProfesional');
-    const mDom = localStorage.getItem('lastDomicilio');
-    if (mNombre) setNombreMedico(mNombre);
-    if (mCed) setCedulaProfesional(mCed);
-    if (mDom) setDomicilio(mDom);
     
     return () => {
       unsubLogs();
       unsubMeds();
     };
   }, []);
+
+  const uniqueDoctors = Array.from(new Set(logs.map(l => l.nombreMedico).filter(Boolean)));
+  const uniqueCedulas = Array.from(new Set(logs.map(l => l.cedulaProfesional).filter(Boolean)));
+  const uniqueDomicilios = Array.from(new Set(logs.map(l => l.domicilio).filter(Boolean)));
 
   const handleMedSelect = (med: Medication) => {
     setSelectedMed(med);
@@ -178,7 +176,7 @@ export default function LogBook() {
       
       const medRef = doc(db, 'medications', selectedMed.id);
       batch.update(medRef, {
-        stock_actual: selectedMed.stock_actual - amt,
+        stock_actual: increment(-amt),
         updatedAt: serverTimestamp()
       });
       
@@ -245,13 +243,10 @@ export default function LogBook() {
       
       // Update medication stocks
       for (const [medId, amount] of Object.entries(refunds)) {
-        const med = medications.find(m => m.id === medId);
-        if (med) {
-          batch.update(doc(db, 'medications', medId), {
-            stock_actual: med.stock_actual + amount,
-            updatedAt: serverTimestamp()
-          });
-        }
+        batch.update(doc(db, 'medications', medId), {
+          stock_actual: increment(amount),
+          updatedAt: serverTimestamp()
+        });
       }
       
       await batch.commit();
@@ -266,7 +261,7 @@ export default function LogBook() {
   const handleExportPDF = (monthYear?: string | React.MouseEvent) => {
     const monthYearStr = typeof monthYear === 'string' ? monthYear : undefined;
     const doc = new jsPDF({ orientation: 'landscape' });
-    const logsToExport = monthYearStr ? groupedLogs[monthYearStr] : logs;
+    const logsToExport = monthYearStr ? groupedLogs[monthYearStr] : filteredLogs;
 
     if (!logsToExport) return;
     
@@ -274,7 +269,7 @@ export default function LogBook() {
     doc.text(`Historial de Salidas - ${monthYearStr || 'Total'}`, 14, 15);
     
     doc.setFontSize(10);
-    doc.text(`Generado el: ${formatDateWithMonthName(new Date().toISOString().split('T')[0])}`, 14, 22);
+    doc.text(`Generado el: ${formatDateWithMonthName(getLocalDateString())}`, 14, 22);
     
     const tableData = logsToExport.map(l => {
       const med = medications.find(m => m.id === l.medicationId);
@@ -587,8 +582,9 @@ export default function LogBook() {
                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 bg-white border"
              >
                <option value="">Seleccione el tipo de paciente</option>
-               <option value="Crónico">Crónico</option>
-               <option value="General">General</option>
+               {PATIENT_TYPES.map(type => (
+                 <option key={type} value={type}>{type}</option>
+               ))}
              </select>
           </div>
 
@@ -599,26 +595,38 @@ export default function LogBook() {
                   <label className="block text-sm font-medium text-gray-700">Nombre del Médico</label>
                   <input 
                     type="text" required
+                    list="doctors-list"
                     value={nombreMedico} onChange={e => setNombreMedico(e.target.value)}
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
                   />
+                  <datalist id="doctors-list">
+                    {uniqueDoctors.map(d => <option key={d} value={d} />)}
+                  </datalist>
                </div>
                <div>
                   <label className="block text-sm font-medium text-gray-700">Cédula Profesional</label>
                   <input 
                     type="text" required
+                    list="cedula-list"
                     value={cedulaProfesional} onChange={e => setCedulaProfesional(e.target.value)}
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
                   />
+                  <datalist id="cedula-list">
+                    {uniqueCedulas.map(c => <option key={c} value={c} />)}
+                  </datalist>
                </div>
              </div>
              <div className="mt-2">
                 <label className="block text-sm font-medium text-gray-700">Domicilio</label>
                 <input 
                   type="text" required
+                  list="domicilio-list"
                   value={domicilio} onChange={e => setDomicilio(e.target.value)}
                   className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
                 />
+                <datalist id="domicilio-list">
+                   {uniqueDomicilios.map(d => <option key={d} value={d} />)}
+                </datalist>
              </div>
           </div>
 

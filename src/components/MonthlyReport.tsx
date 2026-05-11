@@ -11,7 +11,7 @@ export default function MonthlyReport() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, 'medications'), orderBy('num', 'desc'));
+    const q = query(collection(db, 'medications'), orderBy('updatedAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const meds: Medication[] = [];
       snapshot.forEach((d) => {

@@ -4,7 +4,8 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { PatientRecord, Medication } from '../types';
 import { Plus, User, AlertCircle, Loader2, Download, Search, Edit } from 'lucide-react';
 import Modal from './Modal';
-import { cn, formatDateWithMonthName } from '../lib/utils';
+import { cn, formatDateWithMonthName, parseLocalDate, getLocalDateString } from '../lib/utils';
+import { PATIENT_TYPES } from '../constants';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -33,7 +34,7 @@ export default function Patients() {
 
   // Form state
   const [formData, setFormData] = useState({
-    fecha: new Date().toISOString().split('T')[0],
+    fecha: getLocalDateString(),
     nombreCompleto: '',
     expediente: '',
     origen: '',
@@ -44,7 +45,7 @@ export default function Patients() {
   });
 
   useEffect(() => {
-    const qRecords = query(collection(db, 'patientsRegistry'), orderBy('createdAt', 'desc'));
+    const qRecords = query(collection(db, 'patientsRegistry'), orderBy('fecha', 'desc'), orderBy('createdAt', 'desc'));
     let medsLoaded = false;
     let recordsLoaded = false;
 
@@ -173,7 +174,7 @@ export default function Patients() {
       setMedSearch('');
       setSelectedMed(null);
       setFormData({
-        fecha: new Date().toISOString().split('T')[0],
+        fecha: getLocalDateString(),
         nombreCompleto: '',
         expediente: '',
         origen: '',
@@ -211,7 +212,7 @@ export default function Patients() {
     doc.text('Registro de Pacientes - Botica CESSA Pinos', pageWidth / 2, 15, { align: 'center' });
     
     doc.setFontSize(11);
-    const generationDateStr = formatDateWithMonthName(new Date().toISOString().split('T')[0]);
+    const generationDateStr = formatDateWithMonthName(getLocalDateString());
     const dateRange = monthYearStr ? `Reporte de ${monthYearStr} (Generado el ${generationDateStr})` : `Reporte General (${generationDateStr})`;
     doc.text(dateRange, pageWidth / 2, 22, { align: 'center' });
 
@@ -254,7 +255,7 @@ export default function Patients() {
 
     const fileName = monthYearStr 
       ? `Registro_Pacientes_${monthYearStr.replace(' ', '_')}.pdf`
-      : `Registro_Pacientes_Completo_${new Date().toISOString().split('T')[0]}.pdf`;
+      : `Registro_Pacientes_Completo_${getLocalDateString()}.pdf`;
 
     doc.save(fileName);
   };
@@ -282,7 +283,7 @@ export default function Patients() {
 
   // All available months in the data
   const availableMonths = Array.from(new Set(records.map(r => {
-    const date = new Date(r.fecha);
+    const date = parseLocalDate(r.fecha);
     return date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
   }))).sort((a, b) => {
     const [monthA, yearA] = a.toLowerCase().split(' ');
@@ -302,14 +303,14 @@ export default function Patients() {
     
     if (selectedMonthFilter === 'all') return matchesSearch;
     
-    const dateValue = r.fecha ? new Date(r.fecha) : new Date();
+    const dateValue = r.fecha ? parseLocalDate(r.fecha) : new Date();
     const recordMonth = dateValue.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
     return matchesSearch && recordMonth === selectedMonthFilter;
   });
 
   // Group records by month for the UI
   const groupedRecords = filteredRecords.reduce((acc, curr) => {
-    const date = new Date(curr.fecha);
+    const date = parseLocalDate(curr.fecha);
     const monthYear = date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
     if (!acc[monthYear]) acc[monthYear] = [];
     acc[monthYear].push(curr);
@@ -420,7 +421,7 @@ export default function Patients() {
                           <tr key={r.id} className={cn(isRepeated && "bg-amber-50/50 hover:bg-amber-100/50 transition-colors", !isRepeated && "hover:bg-gray-50 transition-colors")}>
                             <td className="px-6 py-4 text-sm text-gray-900 border-r border-gray-100">
                               <div className="font-medium text-gray-900">
-                                {new Date(r.fecha).toLocaleDateString('es-MX', { day: 'numeric', weekday: 'short' })}
+                                {parseLocalDate(r.fecha).toLocaleDateString('es-MX', { day: 'numeric', weekday: 'short' })}
                               </div>
                               <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
                                 {r.tipoPaciente}
@@ -580,13 +581,9 @@ export default function Patients() {
                 onChange={e => setFormData({...formData, tipoPaciente: e.target.value})}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white"
               >
-                <option value="General">General</option>
-                <option value="Sin Expediente">Sin Expediente</option>
-                <option value="Hipertenso">Hipertenso</option>
-                <option value="Crónico">Crónico</option>
-                <option value="Embarazada">Embarazada</option>
-                <option value="Menor de Edad">Menor de Edad</option>
-                <option value="Otro">Otro</option>
+                {PATIENT_TYPES.map(type => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -737,7 +734,7 @@ export default function Patients() {
                 setIsModalOpen(false);
                 setEditingId(null);
                 setFormData({
-                  fecha: new Date().toISOString().split('T')[0],
+                  fecha: getLocalDateString(),
                   nombreCompleto: '',
                   expediente: '',
                   origen: '',
