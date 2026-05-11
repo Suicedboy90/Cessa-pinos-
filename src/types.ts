@@ -37,6 +37,7 @@ export interface PatientRecord {
   id: string;
   fecha: string;
   nombreCompleto: string;
+  expediente: string;
   origen: string;
   tipoPaciente: string;
   medicamento: string;

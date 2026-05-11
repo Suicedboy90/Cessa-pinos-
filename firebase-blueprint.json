@@ -44,6 +44,7 @@
       "properties": {
         "fecha": { "type": "string" },
         "nombreCompleto": { "type": "string" },
+        "expediente": { "type": "string" },
         "origen": { "type": "string" },
         "tipoPaciente": { "type": "string" },
         "medicamento": { "type": "string" },
@@ -51,7 +52,7 @@
         "notas": { "type": "string" },
         "createdAt": { "type": "string", "format": "timestamp" }
       },
-      "required": ["fecha", "nombreCompleto", "origen", "tipoPaciente", "medicamento", "cantidad", "createdAt"]
+      "required": ["fecha", "nombreCompleto", "expediente", "origen", "tipoPaciente", "medicamento", "cantidad", "createdAt"]
     },
     "Config": {
       "title": "Config",

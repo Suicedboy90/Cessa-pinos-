@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy, doc, writeBatch, serverTimestamp, limit } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { LogEntry, Medication } from '../types';
 import { Plus, Loader2, Download, Trash2 } from 'lucide-react';
 import Modal from './Modal';
-import * as xlsx from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { formatDateWithMonthName } from '../lib/utils';
@@ -13,12 +12,66 @@ export default function LogBook() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [medications, setMedications] = useState<Medication[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedMonthFilter, setSelectedMonthFilter] = useState<string>('all');
   const [selectedLogs, setSelectedLogs] = useState<Set<string>>(new Set());
   const [isDeleting, setIsDeleting] = useState(false);
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [nextFolio, setNextFolio] = useState('');
+
+  // All available months in the data
+  const availableMonths = Array.from(new Set(logs.map(l => {
+    const date = new Date(l.fechaEgreso);
+    return date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
+  }))).sort((a, b) => {
+    const [monthA, yearA] = a.toLowerCase().split(' ');
+    const [monthB, yearB] = b.toLowerCase().split(' ');
+    const meses: Record<string, number> = {
+      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
+      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
+    };
+    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
+    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
+    return dateB.getTime() - dateA.getTime();
+  });
+
+  const filteredLogs = logs.filter(l => {
+    const med = medications.find(m => m.id === l.medicationId);
+    const matchesSearch = 
+      (l.paciente || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (l.folio || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (med && (med.nombre || '').toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (l.denominacionGenerica || '').toLowerCase().includes(searchTerm.toLowerCase());
+    
+    if (selectedMonthFilter === 'all') return matchesSearch;
+    
+    const dateValue = l.fechaEgreso ? new Date(l.fechaEgreso) : new Date();
+    const logMonth = dateValue.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
+    return matchesSearch && logMonth === selectedMonthFilter;
+  });
+
+  // Group logs by month for the UI
+  const groupedLogs = filteredLogs.reduce((acc, curr) => {
+    const date = new Date(curr.fechaEgreso);
+    const monthYear = date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
+    if (!acc[monthYear]) acc[monthYear] = [];
+    acc[monthYear].push(curr);
+    return acc;
+  }, {} as Record<string, LogEntry[]>);
+
+  const monthOrder = Object.keys(groupedLogs).sort((a, b) => {
+    const [monthA, yearA] = a.toLowerCase().split(' ');
+    const [monthB, yearB] = b.toLowerCase().split(' ');
+    const meses: Record<string, number> = {
+      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
+      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
+    };
+    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
+    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
+    return dateB.getTime() - dateA.getTime();
+  });
 
   // Form State
   const [folio, setFolio] = useState('');
@@ -39,7 +92,7 @@ export default function LogBook() {
   const [paciente, setPaciente] = useState('');
 
   useEffect(() => {
-    const qLogs = query(collection(db, 'logs'), orderBy('createdAt', 'desc'), limit(50));
+    const qLogs = query(collection(db, 'logs'), orderBy('createdAt', 'desc'));
     const unsubLogs = onSnapshot(qLogs, (snapshot) => {
       const parsedLogs: LogEntry[] = [];
       snapshot.forEach(d => parsedLogs.push({ id: d.id, ...d.data() } as LogEntry));
@@ -131,6 +184,7 @@ export default function LogBook() {
       
       await batch.commit();
       
+      // Cleanup on success
       setIsModalOpen(false);
       
       // Reset defaults
@@ -139,11 +193,13 @@ export default function LogBook() {
       setMedSearch('');
       setCantidad('1');
       setPaciente('');
-      // Don't reset physician info
+      
+      // Don't reset physician info, but update storage
       localStorage.setItem('lastNombreMedico', nombreMedico);
       localStorage.setItem('lastCedulaProfesional', cedulaProfesional);
       localStorage.setItem('lastDomicilio', domicilio);
     } catch (error) {
+      console.error('Error saving log entry:', error);
       handleFirestoreError(error, OperationType.WRITE, 'logs');
     } finally {
       setIsSaving(false);
@@ -163,14 +219,6 @@ export default function LogBook() {
       newSelection.add(logId);
     }
     setSelectedLogs(newSelection);
-  };
-
-  const toggleAllSelection = () => {
-    if (selectedLogs.size === logs.length && logs.length > 0) {
-      setSelectedLogs(new Set());
-    } else {
-      setSelectedLogs(new Set(logs.map(l => l.id)));
-    }
   };
 
   const handleDeleteSelected = async () => {
@@ -215,57 +263,20 @@ export default function LogBook() {
     }
   };
 
-  const handleExportExcel = () => {
-    const dataToExport = logs.map(l => {
-      const med = medications.find(m => m.id === l.medicationId);
-      const dGenerica = med ? `${med.nombre}${med.descripcion ? ` - ${med.descripcion}` : ''}` : (l.denominacionGenerica || '-');
-      const pres = med ? med.presentacion : (l.presentacion || '-');
-      
-      let fechas = ``;
-      if (l.fechaIngreso) fechas += `Ing: ${formatDateWithMonthName(l.fechaIngreso)}\n`;
-      fechas += `Egr: ${formatDateWithMonthName(l.fechaEgreso)}`;
-
-      let medicoStr = l.nombreMedico || '-';
-      if (l.cedulaProfesional) medicoStr += `\nCéd: ${l.cedulaProfesional}`;
-
-      return {
-        'Núm.': l.folio,
-        'Fechas': fechas,
-        'Clave': med ? med.clave : '-',
-        'D. Genérica': dGenerica,
-        'Presentación': pres,
-        'Cant.': `-${l.cantidad}`,
-        'Paciente': l.paciente || '-',
-        'Médico': medicoStr,
-        'Domicilio': l.domicilio || '-'
-      };
-    });
-
-    const worksheet = xlsx.utils.json_to_sheet(dataToExport);
-    
-    // Auto-fit columns
-    if (dataToExport.length > 0) {
-      const wscols = Object.keys(dataToExport[0]).map(key => {
-        const maxLength = Math.max(
-          key.length,
-          ...dataToExport.map(row => String(row[key as keyof typeof row] || '').length)
-        );
-        return { wch: Math.min(maxLength + 2, 100) }; // Cap at 100 characters width
-      });
-      worksheet['!cols'] = wscols;
-    }
-
-    const workbook = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(workbook, worksheet, 'Bitácora');
-    xlsx.writeFile(workbook, 'Bitacora_Salidas.xlsx');
-  };
-
-  const handleExportPDF = () => {
+  const handleExportPDF = (monthYear?: string | React.MouseEvent) => {
+    const monthYearStr = typeof monthYear === 'string' ? monthYear : undefined;
     const doc = new jsPDF({ orientation: 'landscape' });
+    const logsToExport = monthYearStr ? groupedLogs[monthYearStr] : logs;
+
+    if (!logsToExport) return;
     
-    doc.text('Historial de Salidas de Medicamentos', 14, 15);
+    doc.setFontSize(16);
+    doc.text(`Historial de Salidas - ${monthYearStr || 'Total'}`, 14, 15);
     
-    const tableData = logs.map(l => {
+    doc.setFontSize(10);
+    doc.text(`Generado el: ${formatDateWithMonthName(new Date().toISOString().split('T')[0])}`, 14, 22);
+    
+    const tableData = logsToExport.map(l => {
       const med = medications.find(m => m.id === l.medicationId);
       const dGenerica = med ? `${med.nombre}${med.descripcion ? ` - ${med.descripcion}` : ''}` : (l.denominacionGenerica || '-');
       const pres = med ? med.presentacion : (l.presentacion || '-');
@@ -293,12 +304,12 @@ export default function LogBook() {
     autoTable(doc, {
       head: [['Núm.', 'Fechas', 'Clave', 'D. Genérica', 'Presentación', 'Cant.', 'Paciente', 'Médico', 'Domicilio']],
       body: tableData,
-      startY: 20,
+      startY: 28,
       styles: { fontSize: 8 },
       headStyles: { fillColor: [59, 130, 246] }
     });
 
-    doc.save('Bitacora_Salidas.pdf');
+    doc.save(`Bitacora_Salidas_${monthYearStr ? monthYearStr.replace(' ', '_') : 'Total'}.pdf`);
   };
 
   if (loading) {
@@ -321,14 +332,7 @@ export default function LogBook() {
             </button>
           )}
           <button
-            onClick={handleExportExcel}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-white bg-green-600 hover:bg-green-700"
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Excel
-          </button>
-          <button
-            onClick={handleExportPDF}
+            onClick={() => handleExportPDF(selectedMonthFilter !== 'all' ? selectedMonthFilter : undefined)}
             className="flex-1 sm:flex-none inline-flex items-center justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700"
           >
             <Download className="w-4 h-4 mr-2" />
@@ -344,88 +348,136 @@ export default function LogBook() {
         </div>
       </div>
 
-      <div className="overflow-hidden border border-gray-200 sm:rounded-lg">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th scope="col" className="px-4 py-3 text-left w-12">
-                  <input 
-                    type="checkbox" 
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    checked={logs.length > 0 && selectedLogs.size === logs.length}
-                    onChange={toggleAllSelection}
-                  />
-                </th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Núm.</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fechas</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Clave</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">D. Genérica</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Presentación</th>
-                <th scope="col" className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Cant.</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paciente</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Médico</th>
-                <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domicilio</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {logs.length === 0 ? (
-                <tr>
-                  <td colSpan={10} className="px-6 py-8 text-center text-gray-500 text-sm">
-                    No hay registros de salidas.
-                  </td>
-                </tr>
-              ) : (
-                logs.map((l) => {
-                  const med = medications.find(m => m.id === l.medicationId);
-                  const dGenerica = med ? `${med.nombre}${med.descripcion ? ` - ${med.descripcion}` : ''}` : (l.denominacionGenerica || '-');
-                  const pres = med ? med.presentacion : (l.presentacion || '-');
-                  return (
-                    <tr key={l.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-4 w-12">
-                        <input 
-                          type="checkbox" 
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                          checked={selectedLogs.has(l.id)}
-                          onChange={() => toggleSelection(l.id)}
-                        />
-                      </td>
-                      <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-blue-600">
-                        {l.folio}
-                      </td>
-                      <td className="px-4 py-4 text-sm text-gray-500 w-48">
-                        <div><span className="font-medium text-gray-900">Ing:</span> {l.fechaIngreso ? formatDateWithMonthName(l.fechaIngreso) : '-'}</div>
-                        <div><span className="font-medium text-gray-900">Egr:</span> {formatDateWithMonthName(l.fechaEgreso)}</div>
-                      </td>
-                      <td className="px-4 py-4 text-sm font-medium text-gray-900">
-                        {med ? med.clave : '-'}
-                      </td>
-                      <td className="px-4 py-4 text-sm text-gray-900 font-medium">
-                        {dGenerica}
-                      </td>
-                      <td className="px-4 py-4 text-sm text-gray-500">
-                        {pres}
-                      </td>
-                      <td className="px-4 py-4 whitespace-nowrap text-sm text-right font-bold text-red-600">
-                        -{l.cantidad}
-                      </td>
-                      <td className="px-4 py-4 text-sm text-gray-900">
-                        {l.paciente || '-'}
-                      </td>
-                      <td className="px-4 py-4 text-sm text-gray-900">
-                        <div>{l.nombreMedico || '-'}</div>
-                        <div className="text-gray-500 text-xs">{l.cedulaProfesional}</div>
-                      </td>
-                      <td className="px-4 py-4 text-sm text-gray-500 max-w-[200px] truncate" title={l.domicilio}>
-                        {l.domicilio || '-'}
-                      </td>
-                    </tr>
-                  )
-                })
-              )}
-            </tbody>
-          </table>
+      <div className="overflow-hidden border border-gray-200 sm:rounded-lg bg-white">
+        <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row gap-4">
+          <div className="relative flex-1">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+            </span>
+            <input
+              type="text"
+              placeholder="Buscar por paciente, folio o medicamento..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm"
+            />
+          </div>
+          <div className="w-full sm:w-48">
+            <select
+              value={selectedMonthFilter}
+              onChange={(e) => setSelectedMonthFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white text-sm outline-none"
+            >
+              <option value="all">Todos los meses</option>
+              {availableMonths.map(m => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
+          </div>
         </div>
+        {loading ? (
+          <div className="px-6 py-8 text-center text-gray-500">
+            <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
+            Cargando registros...
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="px-6 py-8 text-center text-gray-500">
+            No hay registros de salidas.
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {monthOrder.map((month) => (
+              <div key={month} className="border-b border-gray-100 last:border-0">
+                <div className="bg-gray-50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200">
+                  <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">
+                    {month}
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-white">
+                      <tr>
+                        <th scope="col" className="px-4 py-3 text-left w-12">
+                          <input 
+                            type="checkbox" 
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            checked={groupedLogs[month].every(l => selectedLogs.has(l.id))}
+                            onChange={() => {
+                              const newSelection = new Set(selectedLogs);
+                              const monthIds = groupedLogs[month].map(l => l.id);
+                              const allSelected = monthIds.every(id => newSelection.has(id));
+                              
+                              monthIds.forEach(id => {
+                                if (allSelected) newSelection.delete(id);
+                                else newSelection.add(id);
+                              });
+                              setSelectedLogs(newSelection);
+                            }}
+                          />
+                        </th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Núm.</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Fechas</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Clave</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">D. Genérica</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Presentación</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Cant.</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Paciente</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Médico</th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {groupedLogs[month].map((l) => {
+                        const med = medications.find(m => m.id === l.medicationId);
+                        const dGenerica = med ? `${med.nombre}${med.descripcion ? ` - ${med.descripcion}` : ''}` : (l.denominacionGenerica || '-');
+                        const pres = med ? med.presentacion : (l.presentacion || '-');
+                        return (
+                          <tr key={l.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-4 py-4 w-12">
+                              <input 
+                                type="checkbox" 
+                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                checked={selectedLogs.has(l.id)}
+                                onChange={() => toggleSelection(l.id)}
+                              />
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap text-sm font-bold text-blue-600">
+                              {l.folio}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-gray-500 w-48 font-medium">
+                              {l.fechaIngreso && <div><span className="text-gray-400">Ing:</span> {formatDateWithMonthName(l.fechaIngreso)}</div>}
+                              <div><span className="text-blue-400">Egr:</span> {formatDateWithMonthName(l.fechaEgreso)}</div>
+                            </td>
+                            <td className="px-4 py-4 text-sm font-bold text-gray-900 bg-gray-50/30">
+                              {med ? med.clave : '-'}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-gray-900 font-medium">
+                              {dGenerica}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-gray-500">
+                              {pres}
+                            </td>
+                            <td className="px-4 py-4 whitespace-nowrap text-sm text-right font-black text-red-600">
+                              -{l.cantidad}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-gray-900 font-medium capitalize">
+                              {l.paciente || '-'}
+                            </td>
+                            <td className="px-4 py-4 text-sm text-gray-600">
+                              <div className="font-medium text-gray-900">{l.nombreMedico || '-'}</div>
+                              {l.cedulaProfesional && <div className="text-[10px] text-gray-400">Céd: {l.cedulaProfesional}</div>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <Modal 
