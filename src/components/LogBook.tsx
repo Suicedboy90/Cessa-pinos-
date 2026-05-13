@@ -20,6 +20,7 @@ export default function LogBook() {
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [nextFolio, setNextFolio] = useState('');
 
   // All available months in the data
@@ -152,6 +153,7 @@ export default function LogBook() {
     }
     
     setIsSaving(true);
+    setError(null);
     try {
       const batch = writeBatch(db);
       
@@ -196,9 +198,23 @@ export default function LogBook() {
       localStorage.setItem('lastNombreMedico', nombreMedico);
       localStorage.setItem('lastCedulaProfesional', cedulaProfesional);
       localStorage.setItem('lastDomicilio', domicilio);
-    } catch (error) {
-      console.error('Error saving log entry:', error);
-      handleFirestoreError(error, OperationType.WRITE, 'logs');
+    } catch (err: any) {
+      console.error('Error saving log entry:', err);
+      let message = 'Error al registrar la salida. Por favor intente de nuevo.';
+      
+      if (err.message && err.message.includes('quota')) {
+        message = 'Se ha excedido la cuota gratuita de Firebase (Plan Spark). El registro se guardará localmente.';
+      } else if (err.message && err.message.includes('permission')) {
+        message = 'Error de permisos: No tiene autorización.';
+      } else if (err.message) {
+        try {
+          const parsed = JSON.parse(err.message);
+          if (parsed.error) message = `Error: ${parsed.error}`;
+        } catch {
+          message = err.message;
+        }
+      }
+      setError(message);
     } finally {
       setIsSaving(false);
     }
@@ -477,11 +493,21 @@ export default function LogBook() {
 
       <Modal 
         isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)}
+        onClose={() => {
+          setIsModalOpen(false);
+          setError(null);
+        }}
         title="Nueva Salida"
       >
         <form onSubmit={handleSave} className="space-y-4">
-          
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-red-700 text-sm">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <p>{error}</p>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-b pb-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">Núm. Consecutivo (Sugerido: {nextFolio})</label>

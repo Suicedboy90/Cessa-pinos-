@@ -30,6 +30,7 @@ export default function Inventory() {
   const [surtido, setSurtido] = useState('0');
   const [fechaSurtido, setFechaSurtido] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const q = query(collection(db, 'medications'), orderBy('updatedAt', 'desc'));
@@ -199,6 +200,7 @@ export default function Inventory() {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
+    setError(null);
     try {
       if (editingMed) {
         const ref = doc(db, 'medications', editingMed.id);
@@ -236,9 +238,23 @@ export default function Inventory() {
       
       setIsModalOpen(false);
       resetForm();
-    } catch (error) {
-      console.error('Error saving medication:', error);
-      handleFirestoreError(error, OperationType.WRITE, 'medications');
+    } catch (err: any) {
+      console.error('Error saving medication:', err);
+      let message = 'Error al guardar el medicamento. Por favor intente de nuevo.';
+      
+      if (err.message && err.message.includes('quota')) {
+        message = 'Se ha excedido la cuota gratuita de Firebase (Plan Spark). El registro se guardará localmente.';
+      } else if (err.message && err.message.includes('permission')) {
+        message = 'Error de permisos: No tiene autorización.';
+      } else if (err.message) {
+        try {
+          const parsed = JSON.parse(err.message);
+          if (parsed.error) message = `Error: ${parsed.error}`;
+        } catch {
+          message = err.message;
+        }
+      }
+      setError(message);
     } finally {
       setIsSaving(false);
     }
@@ -400,10 +416,19 @@ export default function Inventory() {
 
       <Modal 
         isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)}
+        onClose={() => {
+          setIsModalOpen(false);
+          setError(null);
+        }}
         title={editingMed ? "Editar Medicamento" : "Nuevo Medicamento"}
       >
         <form onSubmit={handleSave} className="space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-red-700 text-sm">
+              <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <p>{error}</p>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">Núm. Autoincremental</label>

@@ -17,6 +17,7 @@ export default function Patients() {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedMonthFilter, setSelectedMonthFilter] = useState<string>('all');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   // Alert modal state
   const [selectedAlertPatient, setSelectedAlertPatient] = useState<{
@@ -83,6 +84,7 @@ export default function Patients() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
     try {
       setSaving(true);
       const batch = writeBatch(db);
@@ -168,8 +170,10 @@ export default function Patients() {
 
       await batch.commit();
       
-      // Cleanup on success
+      // Success: Close modal immediately
       setIsModalOpen(false);
+      
+      // Reset state
       setEditingId(null);
       setMedSearch('');
       setSelectedMed(null);
@@ -183,9 +187,26 @@ export default function Patients() {
         cantidad: 1,
         notas: ''
       });
-    } catch (error) {
-      console.error('Error saving patient record:', error);
-      handleFirestoreError(error, editingId ? OperationType.UPDATE : OperationType.CREATE, 'patientsRegistry');
+    } catch (err: any) {
+      console.error('Error saving patient record:', err);
+      let message = 'Error al guardar el registro. Por favor intente de nuevo.';
+      
+      if (err.message && err.message.includes('quota')) {
+        message = 'Se ha excedido la cuota gratuita de Firebase (Plan Spark). El registro se guardará localmente pero puede tardar en sincronizarse.';
+      } else if (err.message && err.message.includes('permission')) {
+        message = 'Error de permisos: No tiene autorización para realizar esta operación.';
+      } else if (err.message) {
+        try {
+          const parsed = JSON.parse(err.message);
+          if (parsed.error) message = `Error: ${parsed.error}`;
+        } catch {
+          message = err.message;
+        }
+      }
+      
+      setError(message);
+      // Wait a bit and if it was a permission error that we handle, don't throw yet
+      // so we can show it in the UI.
     } finally {
       setSaving(false);
     }
@@ -554,10 +575,19 @@ export default function Patients() {
 
       <Modal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Nuevo Registro de Paciente"
+        onClose={() => {
+          setIsModalOpen(false);
+          setError(null);
+        }}
+        title={editingId ? "Actualizar Registro de Paciente" : "Nuevo Registro de Paciente"}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
+          {error && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-red-700 text-sm animate-in fade-in slide-in-from-top-2">
+              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <p>{error}</p>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
