@@ -103,7 +103,8 @@ export default function LogBook() {
       // Attempt to calc next folio
       if (parsedLogs.length > 0) {
         // Very basic simple auto-increment suggestion based on last string
-        const lastFolioNum = parseInt(parsedLogs[0].folio.replace(/\D/g, ''), 10);
+        const digits = parsedLogs[0].folio.replace(/\D/g, '');
+        const lastFolioNum = digits ? parseInt(digits, 10) : 0;
         if (!isNaN(lastFolioNum)) {
           setNextFolio((lastFolioNum + 1).toString());
         } else {
@@ -158,7 +159,7 @@ export default function LogBook() {
       const batch = writeBatch(db);
       
       const newLogRef = doc(collection(db, 'logs'));
-      const amt = parseInt(cantidad, 10);
+      const amt = parseInt(cantidad, 10) || 0;
       
       batch.set(newLogRef, {
         folio: folio || nextFolio,
@@ -184,34 +185,34 @@ export default function LogBook() {
       
       await batch.commit();
       
-      // Cleanup on success
-      setIsModalOpen(false);
-      
-      // Reset defaults
+      // Success: Reset form and close modal
       setFolio('');
       setSelectedMed(null);
       setMedSearch('');
       setCantidad('1');
       setPaciente('');
+      setIsModalOpen(false);
       
       // Don't reset physician info, but update storage
       localStorage.setItem('lastNombreMedico', nombreMedico);
       localStorage.setItem('lastCedulaProfesional', cedulaProfesional);
       localStorage.setItem('lastDomicilio', domicilio);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error saving log entry:', err);
       let message = 'Error al registrar la salida. Por favor intente de nuevo.';
       
-      if (err.message && err.message.includes('quota')) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      if (errorMessage.includes('quota')) {
         message = 'Se ha excedido la cuota gratuita de Firebase (Plan Spark). El registro se guardará localmente.';
-      } else if (err.message && err.message.includes('permission')) {
+      } else if (errorMessage.includes('permission')) {
         message = 'Error de permisos: No tiene autorización.';
-      } else if (err.message) {
+      } else if (errorMessage) {
         try {
-          const parsed = JSON.parse(err.message);
+          const parsed = JSON.parse(errorMessage);
           if (parsed.error) message = `Error: ${parsed.error}`;
         } catch {
-          message = err.message;
+          message = errorMessage;
         }
       }
       setError(message);
@@ -320,7 +321,7 @@ export default function LogBook() {
       headStyles: { fillColor: [59, 130, 246] }
     });
 
-    doc.save(`Bitacora_Salidas_${monthYearStr ? monthYearStr.replace(' ', '_') : 'Total'}.pdf`);
+    doc.save(`Antibioticos_Salidas_${monthYearStr ? monthYearStr.replace(' ', '_') : 'Total'}.pdf`);
   };
 
   if (loading) {
@@ -669,8 +670,8 @@ export default function LogBook() {
               disabled={isSaving || !selectedMed}
               className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
             >
-              {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Guardar Salida
+              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              {isSaving ? 'Registrando...' : 'Guardar Salida'}
             </button>
           </div>
         </form>

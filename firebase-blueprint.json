@@ -18,7 +18,7 @@
     },
     "LogEntry": {
       "title": "Log Entry",
-      "description": "Bitácora de registro de uso (salidas).",
+      "description": "Registro de uso de antibióticos (salidas).",
       "type": "object",
       "properties": {
         "folio": { "type": "string", "description": "No. Consecutivo Híbrido" },
@@ -72,11 +72,11 @@
     },
     "logs/{logId}": {
       "schema": { "$ref": "#/entities/LogEntry" },
-      "description": "Registros de bitácora de uso."
+      "description": "Registros de uso de antibióticos."
     },
     "patientsRegistry/{patientRecordId}": {
       "schema": { "$ref": "#/entities/PatientRecord" },
-      "description": "Registros de dispensación a pacientes."
+      "description": "Registro de pacientes sin expediente."
     },
     "config/{configId}": {
       "schema": { "$ref": "#/entities/Config" },

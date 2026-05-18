@@ -205,15 +205,15 @@ export default function Inventory() {
       if (editingMed) {
         const ref = doc(db, 'medications', editingMed.id);
         await updateDoc(ref, {
-          num: parseInt(num, 10),
+          num: parseInt(num, 10) || 0,
           clave,
           nombre,
           descripcion,
           presentacion,
-          stock_actual: parseInt(stock, 10),
-          existencia_mes_pasado: parseInt(existenciaPasado, 10),
+          stock_actual: parseInt(stock, 10) || 0,
+          existencia_mes_pasado: parseInt(existenciaPasado, 10) || 0,
           fecha_existencia_mes_pasado: fechaExistenciaPasado || null,
-          surtido: parseInt(surtido, 10),
+          surtido: parseInt(surtido, 10) || 0,
           fecha_surtido: fechaSurtido || null,
           updatedAt: serverTimestamp()
         });
@@ -221,37 +221,39 @@ export default function Inventory() {
         const newId = doc(collection(db, 'medications')).id;
         
         await setDoc(doc(db, 'medications', newId), {
-          num: parseInt(num, 10),
+          num: parseInt(num, 10) || 0,
           clave,
           nombre,
           descripcion,
           presentacion,
-          stock_actual: parseInt(stock, 10),
-          existencia_mes_pasado: parseInt(existenciaPasado, 10),
+          stock_actual: parseInt(stock, 10) || 0,
+          existencia_mes_pasado: parseInt(existenciaPasado, 10) || 0,
           fecha_existencia_mes_pasado: fechaExistenciaPasado || null,
-          surtido: parseInt(surtido, 10),
+          surtido: parseInt(surtido, 10) || 0,
           fecha_surtido: fechaSurtido || null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
       }
       
-      setIsModalOpen(false);
       resetForm();
-    } catch (err: any) {
+      setIsModalOpen(false);
+    } catch (err: unknown) {
       console.error('Error saving medication:', err);
       let message = 'Error al guardar el medicamento. Por favor intente de nuevo.';
       
-      if (err.message && err.message.includes('quota')) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      if (errorMessage.includes('quota')) {
         message = 'Se ha excedido la cuota gratuita de Firebase (Plan Spark). El registro se guardará localmente.';
-      } else if (err.message && err.message.includes('permission')) {
+      } else if (errorMessage.includes('permission')) {
         message = 'Error de permisos: No tiene autorización.';
-      } else if (err.message) {
+      } else if (errorMessage) {
         try {
-          const parsed = JSON.parse(err.message);
+          const parsed = JSON.parse(errorMessage);
           if (parsed.error) message = `Error: ${parsed.error}`;
         } catch {
-          message = err.message;
+          message = errorMessage;
         }
       }
       setError(message);
@@ -532,8 +534,8 @@ export default function Inventory() {
               disabled={isSaving}
               className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
             >
-              {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Guardar
+              {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              {isSaving ? 'Guardando...' : 'Guardar'}
             </button>
           </div>
         </form>

@@ -28,7 +28,7 @@ export default function Dashboard() {
                 '-ml-0.5 mr-2 h-5 w-5'
               )}
             />
-            Catálogo e Inventario
+            Inventario
           </button>
           <button
             onClick={() => setActiveTab('logbook')}
@@ -45,7 +45,7 @@ export default function Dashboard() {
                 '-ml-0.5 mr-2 h-5 w-5'
               )}
             />
-            Bitácora de Uso
+            Antibióticos
           </button>
           <button
             onClick={() => setActiveTab('report')}
@@ -79,7 +79,7 @@ export default function Dashboard() {
                 '-ml-0.5 mr-2 h-5 w-5'
               )}
             />
-            Pacientes
+            Sin Expediente
           </button>
         </nav>
       </div>

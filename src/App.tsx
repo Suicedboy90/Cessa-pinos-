@@ -41,7 +41,7 @@ export default function App() {
             <Activity className="w-8 h-8 text-blue-600" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Botica Cessa Pinos</h1>
-          <p className="text-gray-500 mb-6">Sistema de inventario y bitácora</p>
+          <p className="text-gray-500 mb-6">Sistema de inventario y antibióticos</p>
           <button
             onClick={login}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"

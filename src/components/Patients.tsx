@@ -87,8 +87,14 @@ export default function Patients() {
     setError(null);
     try {
       setSaving(true);
+      setError(null);
       const batch = writeBatch(db);
       
+      const qty = Number(formData.cantidad) || 0;
+      if (qty <= 0) {
+        throw new Error('La cantidad debe ser mayor a 0');
+      }
+
       const medicamentName = selectedMed 
         ? `[${selectedMed.clave}] ${selectedMed.nombre} - ${selectedMed.presentacion}`
         : editingId ? (records.find(r => r.id === editingId)?.medicamento || 'Desconocido') : 'Desconocido';
@@ -106,20 +112,17 @@ export default function Patients() {
             tipoPaciente: formData.tipoPaciente,
             medicamento: selectedMed ? medicamentName : oldRecord.medicamento,
             medicationId: selectedMed ? selectedMed.id : oldRecord.medicationId,
-            cantidad: Number(formData.cantidad),
+            cantidad: qty,
             notas: formData.notas.trim() || null,
           });
 
           // Atomic Stock Management:
-          // Scenario A: Same medication, different quantity -> Update with diff
-          // Scenario B: Different medication -> Revert old, subtract from new
-          
           const currentMedId = selectedMed ? selectedMed.id : oldRecord.medicationId;
           
           if (currentMedId === oldRecord.medicationId) {
             // Case A: same medication
             if (currentMedId) {
-              const diff = oldRecord.cantidad - Number(formData.cantidad);
+              const diff = oldRecord.cantidad - qty;
               if (diff !== 0) {
                 batch.update(doc(db, 'medications', currentMedId), {
                   stock_actual: increment(diff),
@@ -139,7 +142,7 @@ export default function Patients() {
             // Subtract from new one
             if (currentMedId) {
               batch.update(doc(db, 'medications', currentMedId), {
-                stock_actual: increment(-Number(formData.cantidad)),
+                stock_actual: increment(-qty),
                 updatedAt: serverTimestamp()
               });
             }
@@ -155,14 +158,14 @@ export default function Patients() {
           tipoPaciente: formData.tipoPaciente,
           medicamento: medicamentName,
           medicationId: selectedMed ? selectedMed.id : null,
-          cantidad: Number(formData.cantidad),
+          cantidad: qty,
           notas: formData.notas.trim() || null,
           createdAt: serverTimestamp()
         });
 
         if (selectedMed) {
           batch.update(doc(db, 'medications', selectedMed.id), {
-            stock_actual: increment(-Number(formData.cantidad)),
+            stock_actual: increment(-qty),
             updatedAt: serverTimestamp()
           });
         }
@@ -170,10 +173,7 @@ export default function Patients() {
 
       await batch.commit();
       
-      // Success: Close modal immediately
-      setIsModalOpen(false);
-      
-      // Reset state
+      // Success: Reset state and close modal
       setEditingId(null);
       setMedSearch('');
       setSelectedMed(null);
@@ -187,26 +187,27 @@ export default function Patients() {
         cantidad: 1,
         notas: ''
       });
-    } catch (err: any) {
+      setIsModalOpen(false);
+    } catch (err: unknown) {
       console.error('Error saving patient record:', err);
       let message = 'Error al guardar el registro. Por favor intente de nuevo.';
       
-      if (err.message && err.message.includes('quota')) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      
+      if (errorMessage.includes('quota')) {
         message = 'Se ha excedido la cuota gratuita de Firebase (Plan Spark). El registro se guardará localmente pero puede tardar en sincronizarse.';
-      } else if (err.message && err.message.includes('permission')) {
+      } else if (errorMessage.includes('permission')) {
         message = 'Error de permisos: No tiene autorización para realizar esta operación.';
-      } else if (err.message) {
+      } else if (errorMessage) {
         try {
-          const parsed = JSON.parse(err.message);
+          const parsed = JSON.parse(errorMessage);
           if (parsed.error) message = `Error: ${parsed.error}`;
         } catch {
-          message = err.message;
+          message = errorMessage;
         }
       }
       
       setError(message);
-      // Wait a bit and if it was a permission error that we handle, don't throw yet
-      // so we can show it in the UI.
     } finally {
       setSaving(false);
     }
@@ -230,7 +231,7 @@ export default function Patients() {
 
     // Title and Header
     doc.setFontSize(18);
-    doc.text('Registro de Pacientes - Botica CESSA Pinos', pageWidth / 2, 15, { align: 'center' });
+    doc.text('Sin Expediente - Botica CESSA Pinos', pageWidth / 2, 15, { align: 'center' });
     
     doc.setFontSize(11);
     const generationDateStr = formatDateWithMonthName(getLocalDateString());
@@ -354,7 +355,7 @@ export default function Patients() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-xl font-bold text-gray-900">Registro de Pacientes</h2>
+          <h2 className="text-xl font-bold text-gray-900">Sin Expediente</h2>
           <p className="text-sm text-gray-500">
             Control de medicamentos dispensados y alertas de pacientes frecuentes.
           </p>
@@ -579,7 +580,7 @@ export default function Patients() {
           setIsModalOpen(false);
           setError(null);
         }}
-        title={editingId ? "Actualizar Registro de Paciente" : "Nuevo Registro de Paciente"}
+        title={editingId ? "Actualizar Registro" : "Nuevo Registro"}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
@@ -786,7 +787,7 @@ export default function Patients() {
               className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-              {editingId ? 'Actualizar Registro' : 'Guardar Registro'}
+              {saving ? 'Guardando...' : (editingId ? 'Actualizar Registro' : 'Guardar Registro')}
             </button>
           </div>
         </form>
