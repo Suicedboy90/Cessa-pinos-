@@ -15,108 +15,46 @@ service cloud.firestore {
 
     // Validation definitions
     function isValidMedication(data) {
-      return data.keys().hasAll(['num', 'clave', 'nombre', 'stock_actual', 'createdAt', 'updatedAt'])
-        && data.num is number 
-        && data.clave is string && data.clave.size() <= 200
-        && data.nombre is string && data.nombre.size() <= 300
-        && data.stock_actual is number
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp
-        && (data.keys().hasAny(['existencia_mes_pasado']) ? data.existencia_mes_pasado is number : true)
-        && (data.keys().hasAny(['surtido']) ? data.surtido is number : true)
-        && (data.keys().hasAny(['descripcion']) ? (data.descripcion == null || data.descripcion is string) : true)
-        && (data.keys().hasAny(['presentacion']) ? (data.presentacion == null || data.presentacion is string) : true)
-        && (data.keys().hasAny(['fecha_existencia_mes_pasado']) ? (data.fecha_existencia_mes_pasado == null || data.fecha_existencia_mes_pasado is string) : true)
-        && (data.keys().hasAny(['fecha_surtido']) ? (data.fecha_surtido == null || data.fecha_surtido is string) : true);
+      return data.clave is string
+        && data.nombre is string
+        && (data.keys().hasAny(['fecha_caducidad']) ? (data.fecha_caducidad == null || data.fecha_caducidad is string) : true);
     }
 
     function isValidLogEntry(data) {
-      return data.keys().hasAll(['folio', 'fechaEgreso', 'cantidad', 'medicationId', 'createdAt'])
-        && data.folio is string && data.folio.size() <= 100
-        && (data.keys().hasAny(['fechaIngreso']) && data.fechaIngreso != null ? data.fechaIngreso is string && data.fechaIngreso.size() <= 100 : true)
-        && data.fechaEgreso is string && data.fechaEgreso.size() <= 100
-        && data.cantidad is number
-        && data.medicationId is string && data.medicationId.size() <= 128
-        && data.createdAt is timestamp
-        && (data.keys().hasAny(['denominacionDistinta']) ? (data.denominacionDistinta == null || data.denominacionDistinta is string) : true)
-        && (data.keys().hasAny(['denominacionGenerica']) ? (data.denominacionGenerica == null || data.denominacionGenerica is string) : true)
-        && (data.keys().hasAny(['presentacion']) ? (data.presentacion == null || data.presentacion is string) : true)
-        && (data.keys().hasAny(['nombreMedico']) ? (data.nombreMedico == null || data.nombreMedico is string) : true)
-        && (data.keys().hasAny(['cedulaProfesional']) ? (data.cedulaProfesional == null || data.cedulaProfesional is string) : true)
-        && (data.keys().hasAny(['domicilio']) ? (data.domicilio == null || data.domicilio is string) : true)
-        && (data.keys().hasAny(['paciente']) ? (data.paciente == null || data.paciente is string) : true);
+      return data.folio is string
+        && data.medicationId is string
+        && (data.keys().hasAny(['paciente']) ? (data.paciente == null || data.paciente is string) : true)
+        && (data.keys().hasAny(['nombrePaciente']) ? (data.nombrePaciente == null || data.nombrePaciente is string) : true);
     }
 
     function isValidPatientRecord(data) {
-      return data.keys().hasAll(['fecha', 'nombreCompleto', 'expediente', 'origen', 'tipoPaciente', 'medicamento', 'cantidad', 'createdAt'])
-        && data.fecha is string
-        && data.nombreCompleto is string
-        && data.expediente is string
-        && (data.origen == null || data.origen is string)
-        && data.tipoPaciente is string
-        && data.medicamento is string
-        && data.cantidad is number
-        && data.createdAt is timestamp
-        && (data.keys().hasAny(['notas']) ? (data.notas == null || data.notas is string) : true)
-        && (data.keys().hasAny(['medicationId']) ? (data.medicationId == null || data.medicationId is string) : true);
+      return data.nombreCompleto is string
+        && data.cantidad is number;
     }
 
     function isValidConfig(data) {
-      return data.keys().hasAll(['lastFolio', 'lastMedicationNum'])
-        && data.lastFolio is number
-        && data.lastMedicationNum is number;
+      return true;
     }
 
     // Path logic
     match /medications/{medicationId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn() 
-        && isValidId(medicationId)
-        && isValidMedication(incoming())
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time
-        && incoming().keys().hasOnly(['num', 'clave', 'nombre', 'descripcion', 'presentacion', 'stock_actual', 'existencia_mes_pasado', 'fecha_existencia_mes_pasado', 'surtido', 'fecha_surtido', 'createdAt', 'updatedAt']);
-        
-      allow update: if isSignedIn()
-        && isValidMedication(incoming())
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time
-        && (
-            // Anyone can update stock and basic info for this simple app
-            incoming().diff(existing()).affectedKeys().hasOnly(['num', 'clave', 'nombre', 'descripcion', 'presentacion', 'stock_actual', 'existencia_mes_pasado', 'fecha_existencia_mes_pasado', 'surtido', 'fecha_surtido', 'updatedAt'])
-        );
-        
+      allow create: if isSignedIn() && isValidMedication(incoming());
+      allow update: if isSignedIn() && isValidMedication(incoming());
       allow delete: if isSignedIn();
     }
 
     match /logs/{logId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn()
-        && isValidId(logId)
-        && isValidLogEntry(incoming())
-        && incoming().createdAt == request.time
-        && incoming().keys().hasOnly(['folio', 'fechaIngreso', 'fechaEgreso', 'denominacionDistinta', 'denominacionGenerica', 'presentacion', 'cantidad', 'nombreMedico', 'cedulaProfesional', 'domicilio', 'paciente', 'medicationId', 'createdAt'])
-        && exists(/databases/$(database)/documents/medications/$(incoming().medicationId));
-        
-      allow update: if isSignedIn()
-        && isValidLogEntry(incoming())
-        && incoming().createdAt == existing().createdAt;
-      
+      allow create: if isSignedIn() && isValidLogEntry(incoming());
+      allow update: if isSignedIn() && isValidLogEntry(incoming());
       allow delete: if isSignedIn();
     }
 
     match /patientsRegistry/{patientRecordId} {
       allow read: if isSignedIn();
-      allow create: if isSignedIn()
-        && isValidId(patientRecordId)
-        && isValidPatientRecord(incoming())
-        && incoming().createdAt == request.time
-        && incoming().keys().hasOnly(['fecha', 'nombreCompleto', 'expediente', 'origen', 'tipoPaciente', 'medicamento', 'cantidad', 'notas', 'createdAt', 'medicationId']);
-        
-      allow update: if isSignedIn()
-        && isValidPatientRecord(incoming())
-        && incoming().createdAt == existing().createdAt;
-      
+      allow create: if isSignedIn() && isValidPatientRecord(incoming());
+      allow update: if isSignedIn() && isValidPatientRecord(incoming());
       allow delete: if isSignedIn();
     }
 
@@ -124,11 +62,9 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isSignedIn()
         && isValidId(configId)
-        && isValidConfig(incoming())
-        && incoming().keys().hasOnly(['lastFolio', 'lastMedicationNum']);
+        && isValidConfig(incoming());
       allow update: if isSignedIn()
-        && isValidConfig(incoming())
-        && incoming().diff(existing()).affectedKeys().hasOnly(['lastFolio', 'lastMedicationNum']);
+        && isValidConfig(incoming());
       allow delete: if false;
     }
   }

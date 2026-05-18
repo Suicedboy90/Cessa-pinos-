@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { collection, onSnapshot, query, orderBy, doc, writeBatch, serverTimestamp, increment } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { PatientRecord, Medication } from '../types';
-import { Plus, User, AlertCircle, Loader2, Download, Search, Edit } from 'lucide-react';
+import { Plus, User, AlertCircle, Loader2, Download, Search, Edit, Calendar } from 'lucide-react';
 import Modal from './Modal';
-import { cn, formatDateWithMonthName, parseLocalDate, getLocalDateString } from '../lib/utils';
+import { cn, formatDateWithMonthName, getLocalDateString, getExpirationStatus, getTimeRemainingMessage } from '../lib/utils';
 import { PATIENT_TYPES } from '../constants';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -303,81 +303,86 @@ export default function Patients() {
   const uniqueNames = Array.from(new Set(records.map(r => r.nombreCompleto)));
   const uniqueOrigins = Array.from(new Set(records.map(r => r.origen).filter(Boolean)));
 
-  // All available months in the data
-  const availableMonths = Array.from(new Set(records.map(r => {
-    const date = parseLocalDate(r.fecha);
+  const parseDate = (d: unknown): Date => {
+    if (!d) return new Date();
+    const maybeTimestamp = d as { toDate?: () => Date };
+    if (typeof maybeTimestamp.toDate === 'function') {
+      return maybeTimestamp.toDate();
+    }
+    const date = new Date(d as string | number);
+    return isNaN(date.getTime()) ? new Date() : date;
+  };
+
+  const getMonthKey = (d: unknown) => {
+    const date = parseDate(d);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const getMonthName = (monthKey: string) => {
+    const [year, month] = monthKey.split('-');
+    const date = new Date(parseInt(year), parseInt(month) - 1, 2);
     return date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-  }))).sort((a, b) => {
-    const [monthA, yearA] = a.toLowerCase().split(' ');
-    const [monthB, yearB] = b.toLowerCase().split(' ');
-    const meses: Record<string, number> = {
-      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
-      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
-    };
-    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
-    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
-    return dateB.getTime() - dateA.getTime();
-  });
+  };
+
+  // All available months in the data
+  const availableMonths = Array.from(new Set(records.map(r => getMonthKey(r.fecha))))
+    .filter(key => parseInt(key.split('-')[0]) >= 2024)
+    .sort()
+    .reverse();
 
   const filteredRecords = records.filter(r => {
-    const matchesSearch = (r.nombreCompleto || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         (r.medicamento || '').toLowerCase().includes(searchTerm.toLowerCase());
+    const searchLower = searchTerm.toLowerCase();
+    const med = medications.find(m => m.id === r.medicationId);
+    
+    const matchesSearch = 
+      (r.nombreCompleto || '').toLowerCase().includes(searchLower) ||
+      (r.medicamento || '').toLowerCase().includes(searchLower) ||
+      (r.expediente || '').toLowerCase().includes(searchLower) ||
+      (med && (med.clave || '').toLowerCase().includes(searchLower)) ||
+      (med && (med.nombre || '').toLowerCase().includes(searchLower));
     
     if (selectedMonthFilter === 'all') return matchesSearch;
     
-    const dateValue = r.fecha ? parseLocalDate(r.fecha) : new Date();
-    const recordMonth = dateValue.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-    return matchesSearch && recordMonth === selectedMonthFilter;
+    return matchesSearch && getMonthKey(r.fecha) === selectedMonthFilter;
   });
 
   // Group records by month for the UI
   const groupedRecords = filteredRecords.reduce((acc, curr) => {
-    const date = parseLocalDate(curr.fecha);
-    const monthYear = date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-    if (!acc[monthYear]) acc[monthYear] = [];
-    acc[monthYear].push(curr);
+    const monthKey = getMonthKey(curr.fecha);
+    if (!acc[monthKey]) acc[monthKey] = [];
+    acc[monthKey].push(curr);
     return acc;
   }, {} as Record<string, PatientRecord[]>);
 
-  const monthOrder = Object.keys(groupedRecords).sort((a, b) => {
-    const [monthA, yearA] = a.toLowerCase().split(' ');
-    const [monthB, yearB] = b.toLowerCase().split(' ');
-    const meses: Record<string, number> = {
-      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
-      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
-    };
-    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
-    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
-    return dateB.getTime() - dateA.getTime(); // Newest months first
-  });
+  const monthKeysInOrder = Object.keys(groupedRecords).sort().reverse();
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">Sin Expediente</h2>
-          <p className="text-sm text-gray-500">
-            Control de medicamentos dispensados y alertas de pacientes frecuentes.
-          </p>
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="md:px-4">
+            <h2 className="text-xl font-bold text-gray-900">Sin Expediente</h2>
+            <p className="text-sm text-gray-500">
+              Control de medicamentos dispensados y alertas de pacientes frecuentes.
+            </p>
+          </div>
+          <div className="grid grid-cols-2 md:flex w-full sm:w-auto gap-2">
+            <button
+              onClick={() => handleExport(selectedMonthFilter !== 'all' ? selectedMonthFilter : undefined)}
+              className="flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 min-h-[44px]"
+            >
+              <Download className="w-4 h-4 text-red-600" />
+              PDF
+            </button>
+            <button
+              onClick={() => setIsModalOpen(true)}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors min-h-[44px]"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Nuevo Registro</span>
+              <span className="sm:hidden">Nuevo</span>
+            </button>
+          </div>
         </div>
-        <div className="flex w-full sm:w-auto gap-2">
-          <button
-            onClick={() => handleExport(selectedMonthFilter !== 'all' ? selectedMonthFilter : undefined)}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
-          >
-            <Download className="w-4 h-4 text-red-600" />
-            PDF
-          </button>
-          <button
-            onClick={() => setIsModalOpen(true)}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Nuevo Registro</span>
-            <span className="sm:hidden">Nuevo</span>
-          </button>
-        </div>
-      </div>
 
       <div className="bg-white rounded-lg shadow-sm border border-gray-200">
         <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row gap-4">
@@ -399,7 +404,7 @@ export default function Patients() {
             >
               <option value="all">Todos los meses</option>
               {availableMonths.map(m => (
-                <option key={m} value={m}>{m}</option>
+                <option key={m} value={m}>{getMonthName(m)}</option>
               ))}
             </select>
           </div>
@@ -417,11 +422,11 @@ export default function Patients() {
             </div>
           ) : (
             <div className="space-y-4">
-              {monthOrder.map((month) => (
-                <div key={month} className="border-b border-gray-100 last:border-0">
+              {monthKeysInOrder.map((monthKey) => (
+                <div key={monthKey} className="border-b border-gray-100 last:border-0">
                   <div className="bg-gray-50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200">
                     <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">
-                      {month}
+                      {getMonthName(monthKey)}
                     </span>
                   </div>
                   <table className="min-w-full divide-y divide-gray-200">
@@ -436,14 +441,14 @@ export default function Patients() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {groupedRecords[month].map((r) => {
+                      {groupedRecords[monthKey].map((r) => {
                         const patientGroup = patientRecordsGrouped[r.nombreCompleto.toLowerCase()];
                         const isRepeated = patientGroup && patientGroup.length >= 3;
                         return (
                           <tr key={r.id} className={cn(isRepeated && "bg-amber-50/50 hover:bg-amber-100/50 transition-colors", !isRepeated && "hover:bg-gray-50 transition-colors")}>
                             <td className="px-6 py-4 text-sm text-gray-900 border-r border-gray-100">
                               <div className="font-medium text-gray-900">
-                                {parseLocalDate(r.fecha).toLocaleDateString('es-MX', { day: 'numeric', weekday: 'short' })}
+                                {parseDate(r.fecha).toLocaleDateString('es-MX', { day: 'numeric', weekday: 'short' })}
                               </div>
                               <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
                                 {r.tipoPaciente}
@@ -477,10 +482,10 @@ export default function Patients() {
                               <div className="font-medium text-gray-900 leading-tight">{r.medicamento}</div>
                               <div className="text-gray-500 text-xs mt-1">Cantidad: <span className="font-bold text-blue-600">{r.cantidad}</span></div>
                             </td>
-                            <td className="px-6 py-4 text-sm text-gray-500 max-w-xs truncate italic">
+                            <td className="px-6 py-4 text-sm text-gray-500 max-w-xs whitespace-pre-wrap italic">
                               {r.notas || '-'}
                             </td>
-                            <td className="px-6 py-4 text-sm text-right whitespace-nowrap">
+                            <td className="px-6 py-4 text-sm text-right whitespace-nowrap min-w-[60px]">
                               <button
                                 onClick={() => {
                                   setEditingId(r.id);
@@ -504,10 +509,10 @@ export default function Patients() {
                                   }
                                   setIsModalOpen(true);
                                 }}
-                                className="text-blue-600 hover:text-blue-900 transition-colors bg-blue-50 p-2 rounded-lg"
+                                className="text-blue-600 hover:text-blue-900 transition-colors bg-blue-50 p-3 rounded-lg sm:p-2 sm:bg-blue-50"
                                 title="Editar registro"
                               >
-                                <Edit className="w-4 h-4" />
+                                <Edit className="w-5 h-5 sm:w-4 sm:h-4" />
                               </button>
                             </td>
                           </tr>
@@ -722,10 +727,29 @@ export default function Patients() {
                   </div>
                 )}
                 {selectedMed && (
-                  <div className="mt-2 text-sm text-blue-600 flex items-center justify-between bg-blue-50 p-2 rounded border border-blue-100">
-                    <span>Stock disponible: <strong>{selectedMed.stock_actual}</strong></span>
-                    {selectedMed.stock_actual <= 0 && (
-                      <span className="text-red-500 font-bold">¡Sin stock!</span>
+                  <div className="mt-2 space-y-2">
+                    <div className="text-sm text-blue-600 flex items-center justify-between bg-blue-50 p-2 rounded border border-blue-100">
+                      <span>Stock disponible: <strong>{selectedMed.stock_actual}</strong></span>
+                      {selectedMed.stock_actual <= 0 && (
+                        <span className="text-red-500 font-bold">¡Sin stock!</span>
+                      )}
+                    </div>
+                    {selectedMed.fecha_caducidad && (
+                      <div className={cn(
+                        "text-xs p-2 rounded flex items-center justify-between border",
+                        getExpirationStatus(selectedMed.fecha_caducidad) === 'expired' ? "bg-red-600 text-white font-black border-red-800" :
+                        getExpirationStatus(selectedMed.fecha_caducidad) === 'warning' ? "bg-amber-100 text-amber-800 font-bold border-amber-300" :
+                        "bg-blue-50 text-blue-700 border-blue-100"
+                      )}>
+                        <div className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
+                          <span>Caduca: {formatDateWithMonthName(selectedMed.fecha_caducidad)}</span>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold">{getTimeRemainingMessage(selectedMed.fecha_caducidad)}</div>
+                          {getExpirationStatus(selectedMed.fecha_caducidad) === 'expired' && <span className="uppercase text-[9px] bg-white text-red-600 px-1 rounded block mt-0.5">Retirar del Stock</span>}
+                        </div>
+                      </div>
                     )}
                   </div>
                 )}
@@ -752,8 +776,12 @@ export default function Patients() {
             </label>
             <textarea
               value={formData.notas}
-              onChange={e => setFormData({...formData, notas: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-[80px]"
+              onChange={e => {
+                setFormData({...formData, notas: e.target.value});
+                e.target.style.height = 'auto';
+                e.target.style.height = e.target.scrollHeight + 'px';
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-[80px] overflow-hidden"
               placeholder="Algún comentario sobre la entrega o el paciente..."
             ></textarea>
           </div>

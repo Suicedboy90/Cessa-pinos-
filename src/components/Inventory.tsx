@@ -7,7 +7,7 @@ import * as xlsx from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import Modal from './Modal';
-import { cn, formatDateWithMonthName, getLocalDateString } from '../lib/utils';
+import { cn, formatDateWithMonthName, getLocalDateString, getExpirationStatus, getTimeRemainingMessage } from '../lib/utils';
 
 export default function Inventory() {
   const [medications, setMedications] = useState<Medication[]>([]);
@@ -29,8 +29,15 @@ export default function Inventory() {
   const [fechaExistenciaPasado, setFechaExistenciaPasado] = useState('');
   const [surtido, setSurtido] = useState('0');
   const [fechaSurtido, setFechaSurtido] = useState('');
+  const [fechaCaducidad, setFechaCaducidad] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Auto-calculate stock
+  useEffect(() => {
+    const total = (parseInt(existenciaPasado, 10) || 0) + (parseInt(surtido, 10) || 0);
+    setStock(total.toString());
+  }, [existenciaPasado, surtido]);
 
   useEffect(() => {
     const q = query(collection(db, 'medications'), orderBy('updatedAt', 'desc'));
@@ -52,21 +59,35 @@ export default function Inventory() {
 
   const lowStockMeds = medications.filter(m => m.stock_actual <= 5);
   
-  // All available months in the data
-  const availableMonths = Array.from(new Set(medications.map(m => {
-    const date = m.updatedAt?.toDate ? m.updatedAt.toDate() : new Date();
+  const expiredMeds = medications.filter(m => getExpirationStatus(m.fecha_caducidad) === 'expired');
+  const warningMeds = medications.filter(m => getExpirationStatus(m.fecha_caducidad) === 'warning');
+  
+  const parseDate = (d: unknown): Date => {
+    if (!d) return new Date();
+    const maybeTimestamp = d as { toDate?: () => Date };
+    if (typeof maybeTimestamp.toDate === 'function') {
+      return maybeTimestamp.toDate();
+    }
+    const date = new Date(d as string | number);
+    return isNaN(date.getTime()) ? new Date() : date;
+  };
+
+  const getMonthKey = (d: unknown) => {
+    const date = parseDate(d);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const getMonthName = (monthKey: string) => {
+    const [year, month] = monthKey.split('-');
+    const date = new Date(parseInt(year), parseInt(month) - 1, 2);
     return date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-  }))).sort((a, b) => {
-    const [monthA, yearA] = a.toLowerCase().split(' ');
-    const [monthB, yearB] = b.toLowerCase().split(' ');
-    const meses: Record<string, number> = {
-      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
-      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
-    };
-    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
-    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
-    return dateB.getTime() - dateA.getTime();
-  });
+  };
+
+  // All available months in the data
+  const availableMonths = Array.from(new Set(medications.map(m => getMonthKey(m.updatedAt))))
+    .filter(key => parseInt(key.split('-')[0]) >= 2024)
+    .sort()
+    .reverse();
 
   const filteredMeds = medications.filter(m => {
     const matchesSearch = m.nombre.toLowerCase().includes(searchTerm.toLowerCase()) || 
@@ -74,55 +95,45 @@ export default function Inventory() {
     
     if (selectedMonthFilter === 'all') return matchesSearch;
     
-    const medMonth = (m.updatedAt?.toDate ? m.updatedAt.toDate() : new Date()).toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-    return matchesSearch && medMonth === selectedMonthFilter;
+    return matchesSearch && getMonthKey(m.updatedAt) === selectedMonthFilter;
   });
 
   const groupedMeds = filteredMeds.reduce((acc, curr) => {
-    const date = curr.updatedAt?.toDate ? curr.updatedAt.toDate() : new Date();
-    const monthYear = date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-    if (!acc[monthYear]) acc[monthYear] = [];
-    acc[monthYear].push(curr);
+    const monthKey = getMonthKey(curr.updatedAt);
+    if (!acc[monthKey]) acc[monthKey] = [];
+    acc[monthKey].push(curr);
     return acc;
   }, {} as Record<string, Medication[]>);
 
-  const monthOrder = Object.keys(groupedMeds).sort((a, b) => {
-    const [monthA, yearA] = a.toLowerCase().split(' ');
-    const [monthB, yearB] = b.toLowerCase().split(' ');
-    const meses: Record<string, number> = {
-        'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
-        'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
-    };
-    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
-    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
-    return dateB.getTime() - dateA.getTime();
-  });
+  const monthKeysInOrder = Object.keys(groupedMeds).sort().reverse();
 
   const handleExportInventoryExcel = () => {
-    const dataToExport = filteredMeds.map(m => ({
-      'Núm': m.num,
-      'Clave': m.clave,
-      'Nombre': m.nombre,
-      'Descripción': m.descripcion || '',
-      'Presentación': m.presentacion,
-      'Ex. Mes Pasado': m.existencia_mes_pasado || 0,
-      'Fecha Ex. Pasado': m.fecha_existencia_mes_pasado ? formatDateWithMonthName(m.fecha_existencia_mes_pasado) : '',
-      'Surtido': m.surtido || 0,
-      'Fecha Surtido': m.fecha_surtido ? formatDateWithMonthName(m.fecha_surtido) : '',
-      'Stock Físico (Final)': m.stock_actual
-    }));
-
-    const worksheet = xlsx.utils.json_to_sheet(dataToExport);
-    const workbook = xlsx.utils.book_new();
-    xlsx.utils.book_append_sheet(workbook, worksheet, 'Inventario');
+    const exportData: Record<string, string | number>[] = [];
     
-    // Auto-fit columns
-    const wscols = Object.keys(dataToExport[0] || {}).map(key => ({
-      wch: Math.min(Math.max(key.length, ...dataToExport.map(row => String(row[key as keyof typeof row] || '').length)), 50) + 2
-    }));
-    worksheet['!cols'] = wscols;
+    monthKeysInOrder.forEach(monthKey => {
+      const monthName = getMonthName(monthKey).toUpperCase();
+      exportData.push({ 'MES / PRODUCTO': monthName, 'Clave': '', 'Nombre': '', 'Ex. Mes Pasado': '', 'Surtido': '', 'Stock Físico Final': '', 'Caducidad': '' });
+      
+      groupedMeds[monthKey].forEach(m => {
+        exportData.push({
+          'MES / PRODUCTO': m.nombre,
+          'Clave': m.clave,
+          'Nombre': m.nombre,
+          'Ex. Mes Pasado': m.existencia_mes_pasado || 0,
+          'Surtido': m.surtido || 0,
+          'Stock Físico Final': m.stock_actual,
+          'Caducidad': m.fecha_caducidad ? formatDateWithMonthName(m.fecha_caducidad) : '-'
+        });
+      });
+      
+      exportData.push({});
+    });
 
-    xlsx.writeFile(workbook, `Inventario_Farmacia_${getLocalDateString()}.xlsx`);
+    const worksheet = xlsx.utils.json_to_sheet(exportData);
+    const workbook = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(workbook, worksheet, 'Inventario Mensual');
+    
+    xlsx.writeFile(workbook, `Inventario_Farmacia_Mensual_${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
   const handleExportPDF = () => {
@@ -140,28 +151,26 @@ export default function Inventory() {
       m.clave,
       m.nombre,
       m.presentacion,
-      m.existencia_mes_pasado || 0,
-      m.surtido || 0,
       m.stock_actual,
+      m.fecha_caducidad ? formatDateWithMonthName(m.fecha_caducidad) : '-',
       m.descripcion || '-'
     ]);
 
     autoTable(doc, {
       startY: 30,
-      head: [['Num', 'Clave', 'Medicamento', 'Pres.', 'Ex. Pasada', 'Surtido', 'Stock Final', 'Descripción']],
+      head: [['Num', 'Clave', 'Medicamento', 'Pres.', 'Stock', 'Caducidad', 'Descripción']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [37, 99, 235], textColor: 255 },
       styles: { fontSize: 8 },
       columnStyles: {
         0: { cellWidth: 10 },
-        1: { cellWidth: 35 },
-        2: { cellWidth: 50 },
-        3: { cellWidth: 30 },
-        4: { cellWidth: 20 },
-        5: { cellWidth: 20 },
-        6: { cellWidth: 20 },
-        7: { cellWidth: 'auto' }
+        1: { cellWidth: 25 },
+        2: { cellWidth: 45 },
+        3: { cellWidth: 25 },
+        4: { cellWidth: 15 },
+        5: { cellWidth: 25 },
+        6: { cellWidth: 'auto' }
       }
     });
 
@@ -179,6 +188,7 @@ export default function Inventory() {
     setFechaExistenciaPasado('');
     setSurtido('0');
     setFechaSurtido('');
+    setFechaCaducidad('');
     setEditingMed(null);
   };
 
@@ -194,6 +204,7 @@ export default function Inventory() {
     setFechaExistenciaPasado(m.fecha_existencia_mes_pasado || '');
     setSurtido((m.surtido || 0).toString());
     setFechaSurtido(m.fecha_surtido || '');
+    setFechaCaducidad(m.fecha_caducidad || '');
     setIsModalOpen(true);
   };
 
@@ -215,6 +226,7 @@ export default function Inventory() {
           fecha_existencia_mes_pasado: fechaExistenciaPasado || null,
           surtido: parseInt(surtido, 10) || 0,
           fecha_surtido: fechaSurtido || null,
+          fecha_caducidad: fechaCaducidad || null,
           updatedAt: serverTimestamp()
         });
       } else {
@@ -231,6 +243,7 @@ export default function Inventory() {
           fecha_existencia_mes_pasado: fechaExistenciaPasado || null,
           surtido: parseInt(surtido, 10) || 0,
           fecha_surtido: fechaSurtido || null,
+          fecha_caducidad: fechaCaducidad || null,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
@@ -280,8 +293,73 @@ export default function Inventory() {
         </div>
       )}
 
+      {(expiredMeds.length > 0 || warningMeds.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {expiredMeds.length > 0 && (
+            <div className="bg-red-600 border-l-4 border-red-800 p-4 rounded-md flex items-start gap-3 shadow-sm">
+              <AlertTriangle className="w-5 h-5 text-white mt-0.5" />
+              <div>
+                <h3 className="text-sm font-bold text-white">¡Medicamentos Caducados!</h3>
+                <p className="text-sm text-red-50 mt-1">
+                  Hay {expiredMeds.length} medicamento(s) que ya han caducado. Favor de retirarlos inmediatamente del stock activo.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {expiredMeds.map(m => (
+                     <div key={m.id} className="bg-red-700/40 p-2 rounded border border-red-500/30 text-white flex flex-col gap-1">
+                        <div className="flex justify-between items-start">
+                           <span className="font-bold text-xs uppercase">{m.nombre}</span>
+                           <span className="text-[10px] bg-red-800 px-1.5 py-0.5 rounded font-black">{getTimeRemainingMessage(m.fecha_caducidad)}</span>
+                        </div>
+                        <div className="grid grid-cols-2 text-[10px] text-red-100 gap-2">
+                           <div><span className="opacity-70">Clave:</span> {m.clave}</div>
+                           <div className="text-right"><span className="opacity-70">Presentación:</span> {m.presentacion}</div>
+                        </div>
+                        <div className="text-[10px] font-bold mt-1 text-red-100 flex justify-between items-center bg-red-900/40 px-2 py-1 rounded">
+                           <span>STOCK ACTUAL:</span>
+                           <span className="text-xs">{m.stock_actual} piezas</span>
+                        </div>
+                     </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          {warningMeds.length > 0 && (
+            <div className="bg-amber-100 border-l-4 border-amber-500 p-4 rounded-md flex items-start gap-3 shadow-sm">
+              <AlertTriangle className="w-5 h-5 text-amber-600 mt-0.5" />
+              <div>
+                <h3 className="text-sm font-bold text-amber-800">Próximos a Caducar</h3>
+                <p className="text-sm text-amber-700 mt-1">
+                  Hay {warningMeds.length} medicamento(s) que caducarán pronto. El sistema recomienda priorizar su salida.
+                </p>
+                <div className="mt-3 space-y-2">
+                  {warningMeds.map(m => (
+                    <div key={m.id} className="bg-amber-50 p-2 rounded border border-amber-200 text-amber-900 flex flex-col gap-1">
+                      <div className="flex justify-between items-start">
+                        <span className="font-bold text-xs uppercase">{m.nombre}</span>
+                        <span className="text-[10px] bg-amber-200 px-1.5 py-0.5 rounded font-black text-amber-800 border border-amber-300">
+                          {getTimeRemainingMessage(m.fecha_caducidad)}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 text-[10px] text-amber-700 gap-2">
+                        <div><span className="opacity-70">Clave:</span> {m.clave}</div>
+                        <div className="text-right"><span className="opacity-70">Presentación:</span> {m.presentacion}</div>
+                      </div>
+                      <div className="text-[10px] font-bold mt-1 text-amber-800 flex justify-between items-center bg-amber-100/50 px-2 py-1 rounded border border-amber-200/50">
+                        <span>STOCK ACTUAL:</span>
+                        <span className="text-xs">{m.stock_actual} piezas</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between bg-white p-4 rounded-lg border border-gray-200">
-        <div className="flex flex-col sm:flex-row gap-4 w-full sm:flex-1">
+        <div className="flex flex-col md:flex-row gap-4 w-full md:flex-1">
           <div className="relative flex-1">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
               <Search className="h-5 w-5 text-gray-400" />
@@ -294,7 +372,7 @@ export default function Inventory() {
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
-          <div className="w-full sm:w-56">
+          <div className="w-full md:w-56">
             <select
               value={selectedMonthFilter}
               onChange={(e) => setSelectedMonthFilter(e.target.value)}
@@ -302,25 +380,25 @@ export default function Inventory() {
             >
               <option value="all">Modificados (Todo)</option>
               {availableMonths.map(m => (
-                <option key={m} value={m}>{m}</option>
+                <option key={m} value={m}>{getMonthName(m)}</option>
               ))}
             </select>
           </div>
         </div>
-        <div className="flex items-center gap-3 w-full sm:w-auto">
+        <div className="grid grid-cols-2 md:flex items-center gap-2 w-full sm:w-auto">
           <button
             onClick={handleExportInventoryExcel}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center px-4 py-2 border border-green-300 shadow-sm text-sm font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100"
+            className="flex items-center justify-center px-4 py-2.5 border border-green-300 shadow-sm text-xs font-medium rounded-lg text-green-700 bg-green-50 hover:bg-green-100 min-h-[44px]"
           >
-            <Download className="w-4 h-4 mr-2" />
-            Inventario Excel
+            <Download className="w-4 h-4 mr-1 sm:mr-2" />
+            Excel
           </button>
           <button
             onClick={handleExportPDF}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50"
+            className="flex items-center justify-center px-4 py-2.5 border border-gray-300 shadow-sm text-xs font-medium rounded-lg text-gray-700 bg-white hover:bg-gray-50 min-h-[44px]"
           >
-            <Download className="w-4 h-4 mr-2 text-red-600" />
-            Inventario PDF
+            <Download className="w-4 h-4 mr-1 sm:mr-2 text-red-600" />
+            PDF
           </button>
           <button
             onClick={() => { 
@@ -329,10 +407,10 @@ export default function Inventory() {
               setNum((maxN + 1).toString());
               setIsModalOpen(true); 
             }}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+            className="col-span-2 md:col-span-1 inline-flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-bold rounded-lg text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 min-h-[44px]"
           >
             <Plus className="w-4 h-4 mr-2" />
-            Nuevo
+            Nuevo Registro
           </button>
         </div>
       </div>
@@ -345,11 +423,11 @@ export default function Inventory() {
             </div>
           ) : (
             <div className="space-y-6">
-              {monthOrder.map((month) => (
-                <div key={month} className="border-b border-gray-100 last:border-0">
+              {monthKeysInOrder.map((monthKey) => (
+                <div key={monthKey} className="border-b border-gray-100 last:border-0">
                   <div className="bg-gray-50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200">
                     <span className="text-xs font-bold text-gray-600 uppercase tracking-wider">
-                      Modificados en {month}
+                      Modificados en {getMonthName(monthKey)}
                     </span>
                   </div>
                   <table className="min-w-full divide-y divide-gray-200">
@@ -361,12 +439,13 @@ export default function Inventory() {
                         <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Presentación</th>
                         <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Ex. Pasado</th>
                         <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Surtido</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Caducidad</th>
                         <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Stock Físico</th>
                         <th scope="col" className="px-4 py-3 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Acciones</th>
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {groupedMeds[month].map((m) => (
+                      {groupedMeds[monthKey].map((m) => (
                         <tr key={m.id} className={cn(m.stock_actual <= 5 ? "bg-red-50/30" : "", "hover:bg-gray-50 transition-colors")}>
                           <td className="px-4 py-4 whitespace-nowrap text-sm font-medium text-gray-900 border-r border-gray-100">
                             {m.num}
@@ -389,6 +468,23 @@ export default function Inventory() {
                             <div>+{m.surtido || 0}</div>
                             {m.fecha_surtido && <div className="text-[10px] text-gray-400 mt-1">{formatDateWithMonthName(m.fecha_surtido)}</div>}
                           </td>
+                          <td className={cn(
+                            "px-4 py-4 whitespace-nowrap text-sm",
+                            getExpirationStatus(m.fecha_caducidad) === 'expired' ? "bg-red-100 text-red-800 font-black" : 
+                            getExpirationStatus(m.fecha_caducidad) === 'warning' ? "bg-amber-50 text-amber-800 font-bold" : "text-gray-500"
+                          )}>
+                            {m.fecha_caducidad ? (
+                              <>
+                                <div className="text-[10px] font-normal text-gray-500 mb-0.5">{formatDateWithMonthName(m.fecha_caducidad)}</div>
+                                <div className="leading-tight">
+                                  {getTimeRemainingMessage(m.fecha_caducidad)}
+                                </div>
+                                {getExpirationStatus(m.fecha_caducidad) === 'expired' && <div className="text-[9px] uppercase mt-1 px-1.5 py-0.5 bg-red-600 text-white rounded inline-block">¡RETIRAR!</div>}
+                              </>
+                            ) : (
+                              <span className="text-gray-300">No definida</span>
+                            )}
+                          </td>
                           <td className="px-4 py-4 whitespace-nowrap text-sm text-right">
                             <span className={cn(
                               "inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-black",
@@ -397,12 +493,12 @@ export default function Inventory() {
                               {m.stock_actual}
                             </span>
                           </td>
-                          <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          <td className="px-4 py-4 whitespace-nowrap text-right text-sm font-medium min-w-[60px]">
                             <button 
                               onClick={() => openEdit(m)}
-                              className="text-blue-600 hover:text-blue-900 focus:outline-none transition-colors"
+                              className="text-blue-600 hover:text-blue-900 focus:outline-none transition-colors p-2 bg-blue-50 rounded-lg sm:bg-transparent"
                             >
-                              <Edit2 className="w-4 h-4" />
+                              <Edit2 className="w-5 h-5 sm:w-4 sm:h-4" />
                             </button>
                           </td>
                         </tr>
@@ -513,13 +609,26 @@ export default function Inventory() {
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Stock Actual (Físico/Calculado)</label>
+          <div className="border p-3 rounded-md bg-orange-50/50">
+            <label className="block text-sm font-bold text-orange-900">Fecha de Caducidad</label>
             <input 
-              type="number" min="0" required
-              value={stock} onChange={e => setStock(e.target.value)}
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+              type="date"
+              value={fechaCaducidad} onChange={e => setFechaCaducidad(e.target.value)}
+              className="mt-1 block w-full rounded-md border-orange-300 shadow-sm focus:border-orange-500 focus:ring-orange-500 sm:text-sm p-2 border bg-white" 
             />
+            <p className="text-[10px] text-orange-700 mt-1">El sistema generará alertas automáticas 3 meses antes de esta fecha.</p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-gray-700">Stock Actual Físico (Calculado Automáticamente)</label>
+            <div className="mt-1 flex items-center">
+              <input 
+                type="number" readOnly
+                value={stock}
+                className="block w-full rounded-md border-gray-300 shadow-sm sm:text-lg font-black p-3 border bg-gray-100 text-blue-700" 
+              />
+              <span className="ml-3 text-xs text-gray-500 italic">Mes Pasado + Surtido</span>
+            </div>
           </div>
           <div className="pt-4 flex justify-end gap-3">
             <button

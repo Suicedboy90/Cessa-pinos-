@@ -6,7 +6,7 @@ import { Plus, Loader2, Download, Trash2 } from 'lucide-react';
 import Modal from './Modal';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { formatDateWithMonthName, parseLocalDate, getLocalDateString } from '../lib/utils';
+import { cn, formatDateWithMonthName, getLocalDateString, getExpirationStatus, getTimeRemainingMessage } from '../lib/utils';
 import { PATIENT_TYPES } from '../constants';
 
 export default function LogBook() {
@@ -23,57 +23,58 @@ export default function LogBook() {
   const [error, setError] = useState<string | null>(null);
   const [nextFolio, setNextFolio] = useState('');
 
-  // All available months in the data
-  const availableMonths = Array.from(new Set(logs.map(l => {
-    const date = parseLocalDate(l.fechaEgreso);
+  const parseDate = (d: unknown): Date => {
+    if (!d) return new Date();
+    const maybeTimestamp = d as { toDate?: () => Date };
+    if (typeof maybeTimestamp.toDate === 'function') {
+      return maybeTimestamp.toDate();
+    }
+    const date = new Date(d as string | number);
+    return isNaN(date.getTime()) ? new Date() : date;
+  };
+
+  const getMonthKey = (d: unknown) => {
+    const date = parseDate(d);
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  };
+
+  const getMonthName = (monthKey: string) => {
+    const [year, month] = monthKey.split('-');
+    const date = new Date(parseInt(year), parseInt(month) - 1, 2);
     return date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-  }))).sort((a, b) => {
-    const [monthA, yearA] = a.toLowerCase().split(' ');
-    const [monthB, yearB] = b.toLowerCase().split(' ');
-    const meses: Record<string, number> = {
-      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
-      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
-    };
-    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
-    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
-    return dateB.getTime() - dateA.getTime();
-  });
+  };
+
+  // All available months in the data
+  const availableMonths = Array.from(new Set(logs.map(l => getMonthKey(l.fechaEgreso))))
+    .filter(key => parseInt(key.split('-')[0]) >= 2024)
+    .sort()
+    .reverse();
 
   const filteredLogs = logs.filter(l => {
     const med = medications.find(m => m.id === l.medicationId);
+    const searchLower = searchTerm.toLowerCase();
     const matchesSearch = 
-      (l.paciente || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (l.folio || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (med && (med.nombre || '').toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (l.denominacionGenerica || '').toLowerCase().includes(searchTerm.toLowerCase());
+      (l.paciente || '').toLowerCase().includes(searchLower) ||
+      (l.nombrePaciente || '').toLowerCase().includes(searchLower) ||
+      (l.folio || '').toLowerCase().includes(searchLower) ||
+      (med && (med.nombre || '').toLowerCase().includes(searchLower)) ||
+      (med && (med.clave || '').toLowerCase().includes(searchLower)) ||
+      (l.denominacionGenerica || '').toLowerCase().includes(searchLower);
     
     if (selectedMonthFilter === 'all') return matchesSearch;
     
-    const dateValue = l.fechaEgreso ? parseLocalDate(l.fechaEgreso) : new Date();
-    const logMonth = dateValue.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-    return matchesSearch && logMonth === selectedMonthFilter;
+    return matchesSearch && getMonthKey(l.fechaEgreso) === selectedMonthFilter;
   });
 
   // Group logs by month for the UI
   const groupedLogs = filteredLogs.reduce((acc, curr) => {
-    const date = parseLocalDate(curr.fechaEgreso);
-    const monthYear = date.toLocaleString('es-MX', { month: 'long', year: 'numeric' });
-    if (!acc[monthYear]) acc[monthYear] = [];
-    acc[monthYear].push(curr);
+    const monthKey = getMonthKey(curr.fechaEgreso);
+    if (!acc[monthKey]) acc[monthKey] = [];
+    acc[monthKey].push(curr);
     return acc;
   }, {} as Record<string, LogEntry[]>);
 
-  const monthOrder = Object.keys(groupedLogs).sort((a, b) => {
-    const [monthA, yearA] = a.toLowerCase().split(' ');
-    const [monthB, yearB] = b.toLowerCase().split(' ');
-    const meses: Record<string, number> = {
-      'enero': 0, 'febrero': 1, 'marzo': 2, 'abril': 3, 'mayo': 4, 'junio': 5,
-      'julio': 6, 'agosto': 7, 'septiembre': 8, 'octubre': 9, 'noviembre': 10, 'diciembre': 11
-    };
-    const dateA = new Date(parseInt(yearA), meses[monthA] ?? 0, 1);
-    const dateB = new Date(parseInt(yearB), meses[monthB] ?? 0, 1);
-    return dateB.getTime() - dateA.getTime();
-  });
+  const monthKeysInOrder = Object.keys(groupedLogs).sort().reverse();
 
   // Form State
   const [folio, setFolio] = useState('');
@@ -92,6 +93,7 @@ export default function LogBook() {
   const [cedulaProfesional, setCedulaProfesional] = useState('');
   const [domicilio, setDomicilio] = useState('');
   const [paciente, setPaciente] = useState('');
+  const [nombrePaciente, setNombrePaciente] = useState('');
 
   useEffect(() => {
     const qLogs = query(collection(db, 'logs'), orderBy('fechaEgreso', 'desc'), orderBy('createdAt', 'desc'));
@@ -173,6 +175,7 @@ export default function LogBook() {
         cedulaProfesional,
         domicilio,
         paciente,
+        nombrePaciente,
         medicationId: selectedMed.id,
         createdAt: serverTimestamp()
       });
@@ -191,6 +194,7 @@ export default function LogBook() {
       setMedSearch('');
       setCantidad('1');
       setPaciente('');
+      setNombrePaciente('');
       setIsModalOpen(false);
       
       // Don't reset physician info, but update storage
@@ -307,7 +311,7 @@ export default function LogBook() {
         dGenerica,
         pres,
         `-${l.cantidad}`,
-        l.paciente || '-',
+        `${l.paciente || ''} ${l.nombrePaciente ? `- ${l.nombrePaciente}` : ''}`.trim() || '-',
         medicoStr,
         l.domicilio || '-'
       ];
@@ -332,12 +336,12 @@ export default function LogBook() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <h2 className="text-lg font-medium text-gray-900">Historial de Salidas</h2>
-        <div className="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+        <div className="grid grid-cols-2 md:flex items-center gap-2 w-full sm:w-auto">
           {selectedLogs.size > 0 && (
             <button
               onClick={handleDeleteSelected}
               disabled={isDeleting}
-              className="flex-1 sm:flex-none inline-flex items-center justify-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 disabled:opacity-50"
+              className="col-span-2 md:col-span-1 flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 min-h-[44px]"
             >
               {isDeleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
               Eliminar ({selectedLogs.size})
@@ -345,17 +349,17 @@ export default function LogBook() {
           )}
           <button
             onClick={() => handleExportPDF(selectedMonthFilter !== 'all' ? selectedMonthFilter : undefined)}
-            className="flex-1 sm:flex-none inline-flex items-center justify-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700"
+            className="flex items-center justify-center px-4 py-2.5 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 min-h-[44px]"
           >
             <Download className="w-4 h-4 mr-2" />
             PDF
           </button>
           <button
             onClick={() => { setFolio(nextFolio); setIsModalOpen(true); }}
-            className="inline-flex items-center justify-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700"
+            className="flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-bold rounded-lg text-white bg-blue-600 hover:bg-blue-700 min-h-[44px]"
           >
             <Plus className="w-4 h-4 mr-2" />
-            Registrar Salida
+            Nueva Salida
           </button>
         </div>
       </div>
@@ -384,7 +388,7 @@ export default function LogBook() {
             >
               <option value="all">Todos los meses</option>
               {availableMonths.map(m => (
-                <option key={m} value={m}>{m}</option>
+                <option key={m} value={m}>{getMonthName(m)}</option>
               ))}
             </select>
           </div>
@@ -400,25 +404,25 @@ export default function LogBook() {
           </div>
         ) : (
           <div className="space-y-6">
-            {monthOrder.map((month) => (
-              <div key={month} className="border-b border-gray-100 last:border-0">
+            {monthKeysInOrder.map((monthKey) => (
+              <div key={monthKey} className="border-b border-gray-100 last:border-0">
                 <div className="bg-gray-50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200">
                   <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">
-                    {month}
+                    {getMonthName(monthKey)}
                   </span>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-gray-200">
                     <thead className="bg-white">
                       <tr>
-                        <th scope="col" className="px-4 py-3 text-left w-12">
+                        <th scope="col" className="px-4 py-3 text-left w-12 min-w-[48px]">
                           <input 
                             type="checkbox" 
-                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            checked={groupedLogs[month].every(l => selectedLogs.has(l.id))}
+                            className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                            checked={groupedLogs[monthKey].every(l => selectedLogs.has(l.id))}
                             onChange={() => {
                               const newSelection = new Set(selectedLogs);
-                              const monthIds = groupedLogs[month].map(l => l.id);
+                              const monthIds = groupedLogs[monthKey].map(l => l.id);
                               const allSelected = monthIds.every(id => newSelection.has(id));
                               
                               monthIds.forEach(id => {
@@ -440,16 +444,16 @@ export default function LogBook() {
                       </tr>
                     </thead>
                     <tbody className="bg-white divide-y divide-gray-200">
-                      {groupedLogs[month].map((l) => {
+                      {groupedLogs[monthKey].map((l) => {
                         const med = medications.find(m => m.id === l.medicationId);
                         const dGenerica = med ? `${med.nombre}${med.descripcion ? ` - ${med.descripcion}` : ''}` : (l.denominacionGenerica || '-');
                         const pres = med ? med.presentacion : (l.presentacion || '-');
                         return (
                           <tr key={l.id} className="hover:bg-gray-50 transition-colors">
-                            <td className="px-4 py-4 w-12">
+                            <td className="px-4 py-4 w-12 min-w-[48px]">
                               <input 
                                 type="checkbox" 
-                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                 checked={selectedLogs.has(l.id)}
                                 onChange={() => toggleSelection(l.id)}
                               />
@@ -474,7 +478,8 @@ export default function LogBook() {
                               -{l.cantidad}
                             </td>
                             <td className="px-4 py-4 text-sm text-gray-900 font-medium capitalize">
-                              {l.paciente || '-'}
+                              <div className="font-bold text-blue-800">{l.nombrePaciente || '-'}</div>
+                              <div className="text-[10px] text-gray-500">{l.paciente || '-'}</div>
                             </td>
                             <td className="px-4 py-4 text-sm text-gray-600">
                               <div className="font-medium text-gray-900">{l.nombreMedico || '-'}</div>
@@ -556,9 +561,24 @@ export default function LogBook() {
               </div>
             )}
             {selectedMed && (
-               <div className="mt-2 text-xs text-green-600 bg-green-50 p-2 rounded flex justify-between">
-                 <span>Medicamento seleccionado válido.</span>
-                 <span className="font-bold">Stock disp: {selectedMed.stock_actual}</span>
+               <div className="mt-2 space-y-2">
+                 <div className="text-xs text-green-600 bg-green-50 p-2 rounded flex justify-between">
+                   <span>Medicamento seleccionado válido.</span>
+                   <span className="font-bold">Stock disp: {selectedMed.stock_actual}</span>
+                 </div>
+                 {selectedMed.fecha_caducidad && (
+                   <div className={cn(
+                     "text-xs p-2 rounded flex justify-between border",
+                     getExpirationStatus(selectedMed.fecha_caducidad) === 'expired' ? "bg-red-600 text-white font-black border-red-800" :
+                     getExpirationStatus(selectedMed.fecha_caducidad) === 'warning' ? "bg-amber-100 text-amber-800 font-bold border-amber-300" :
+                     "bg-blue-50 text-blue-700 border-blue-100"
+                   )}>
+                     <span>Caducidad: {formatDateWithMonthName(selectedMed.fecha_caducidad)}</span>
+                     <div className="text-right">
+                       <span className="font-bold">{getTimeRemainingMessage(selectedMed.fecha_caducidad)}</span>
+                     </div>
+                   </div>
+                 )}
                </div>
             )}
           </div>
@@ -601,18 +621,29 @@ export default function LogBook() {
             </div>
           </div>
 
-          <div>
-             <label className="block text-sm font-medium text-gray-700">Dirigido a Paciente (Tipo)</label>
-             <select
-               value={paciente} 
-               onChange={e => setPaciente(e.target.value)}
-               className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 bg-white border"
-             >
-               <option value="">Seleccione el tipo de paciente</option>
-               {PATIENT_TYPES.map(type => (
-                 <option key={type} value={type}>{type}</option>
-               ))}
-             </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+             <div>
+               <label className="block text-sm font-medium text-gray-700">Dirigido a Paciente (Tipo)</label>
+               <select
+                 value={paciente} 
+                 onChange={e => setPaciente(e.target.value)}
+                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 bg-white border"
+               >
+                 <option value="">Seleccione el tipo de paciente</option>
+                 {PATIENT_TYPES.map(type => (
+                   <option key={type} value={type}>{type}</option>
+                 ))}
+               </select>
+             </div>
+             <div>
+                <label className="block text-sm font-medium text-gray-700">Nombre del Paciente</label>
+                <input 
+                  type="text"
+                  value={nombrePaciente} onChange={e => setNombrePaciente(e.target.value)}
+                  placeholder="Nombre completo"
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                />
+             </div>
           </div>
 
           <div className="border-t pt-4">

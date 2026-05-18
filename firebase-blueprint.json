@@ -11,6 +11,7 @@
         "descripcion": { "type": "string" },
         "presentacion": { "type": "string" },
         "stock_actual": { "type": "number" },
+        "fecha_caducidad": { "type": "string", "description": "Fecha de caducidad en formato YYYY-MM-DD" },
         "createdAt": { "type": "string", "format": "timestamp" },
         "updatedAt": { "type": "string", "format": "timestamp" }
       },
@@ -32,6 +33,8 @@
         "nombreMedico": { "type": "string" },
         "cedulaProfesional": { "type": "string" },
         "domicilio": { "type": "string" },
+        "paciente": { "type": "string", "description": "Tipo de paciente" },
+        "nombrePaciente": { "type": "string", "description": "Nombre del paciente" },
         "medicationId": { "type": "string", "description": "ID del medicamento (clave en DB)" },
         "createdAt": { "type": "string", "format": "timestamp" }
       },

@@ -12,6 +12,7 @@ export interface Medication {
   fecha_existencia_mes_pasado?: string | null;
   surtido?: number;
   fecha_surtido?: string | null;
+  fecha_caducidad?: string | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -29,6 +30,7 @@ export interface LogEntry {
   cedulaProfesional?: string;
   domicilio?: string;
   paciente?: string;
+  nombrePaciente?: string;
   medicationId: string;
   createdAt: Timestamp;
 }
