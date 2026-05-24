@@ -48,3 +48,13 @@ export interface PatientRecord {
   notas?: string;
   createdAt: Timestamp;
 }
+
+export interface UserRole {
+  email: string;
+  role: 'master' | 'admin' | 'encargado';
+  status: 'pending' | 'approved';
+  systemId?: string;
+  name?: string;
+  addedBy?: string;
+}
+

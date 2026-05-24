@@ -17,6 +17,7 @@ service cloud.firestore {
     function isValidMedication(data) {
       return data.clave is string
         && data.nombre is string
+        && (data.keys().hasAny(['activo']) ? data.activo is bool : true)
         && (data.keys().hasAny(['fecha_caducidad']) ? (data.fecha_caducidad == null || data.fecha_caducidad is string) : true);
     }
 
@@ -37,6 +38,10 @@ service cloud.firestore {
     }
 
     // Path logic
+    match /user_roles/{email} {
+      allow read, write: if isSignedIn();
+    }
+
     match /medications/{medicationId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && isValidMedication(incoming());

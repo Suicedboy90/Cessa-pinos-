@@ -6,10 +6,14 @@ import { Plus, Loader2, Download, Trash2 } from 'lucide-react';
 import Modal from './Modal';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { cn, formatDateWithMonthName, getLocalDateString, getExpirationStatus, getTimeRemainingMessage } from '../lib/utils';
+import { cn, formatDateWithMonthName, getLocalDateString, getExpirationStatus, getTimeRemainingMessage, parseLocalDate } from '../lib/utils';
 import { PATIENT_TYPES } from '../constants';
 
-export default function LogBook() {
+interface LogBookProps {
+  systemId: string;
+}
+
+export default function LogBook({ systemId }: LogBookProps) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [medications, setMedications] = useState<Medication[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,6 +32,9 @@ export default function LogBook() {
     const maybeTimestamp = d as { toDate?: () => Date };
     if (typeof maybeTimestamp.toDate === 'function') {
       return maybeTimestamp.toDate();
+    }
+    if (typeof d === 'string' && d.includes('-')) {
+      return parseLocalDate(d);
     }
     const date = new Date(d as string | number);
     return isNaN(date.getTime()) ? new Date() : date;
@@ -99,7 +106,12 @@ export default function LogBook() {
     const qLogs = query(collection(db, 'logs'), orderBy('fechaEgreso', 'desc'), orderBy('createdAt', 'desc'));
     const unsubLogs = onSnapshot(qLogs, (snapshot) => {
       const parsedLogs: LogEntry[] = [];
-      snapshot.forEach(d => parsedLogs.push({ id: d.id, ...d.data() } as LogEntry));
+      snapshot.forEach((d) => {
+        const data = d.data();
+        if (data.systemId === systemId) {
+          parsedLogs.push({ id: d.id, ...data } as LogEntry);
+        }
+      });
       setLogs(parsedLogs);
       
       // Attempt to calc next folio
@@ -122,7 +134,12 @@ export default function LogBook() {
     const qMeds = query(collection(db, 'medications'));
     const unsubMeds = onSnapshot(qMeds, (snapshot) => {
       const parsedMeds: Medication[] = [];
-      snapshot.forEach(d => parsedMeds.push({ id: d.id, ...d.data() } as Medication));
+      snapshot.forEach((d) => {
+        const data = d.data();
+        if (data.activo !== false && data.systemId === systemId) {
+          parsedMeds.push({ id: d.id, ...data } as Medication);
+        }
+      });
       setMedications(parsedMeds);
     });
 
@@ -134,7 +151,7 @@ export default function LogBook() {
       unsubLogs();
       unsubMeds();
     };
-  }, []);
+  }, [systemId]);
 
   const uniqueDoctors = Array.from(new Set(logs.map(l => l.nombreMedico).filter(Boolean)));
   const uniqueCedulas = Array.from(new Set(logs.map(l => l.cedulaProfesional).filter(Boolean)));
@@ -177,6 +194,7 @@ export default function LogBook() {
         paciente,
         nombrePaciente,
         medicationId: selectedMed.id,
+        systemId,
         createdAt: serverTimestamp()
       });
       
@@ -186,7 +204,9 @@ export default function LogBook() {
         updatedAt: serverTimestamp()
       });
       
-      await batch.commit();
+      const commitPromise1 = batch.commit();
+      const timeoutPromise1 = new Promise((resolve) => setTimeout(resolve, 300));
+      await Promise.race([commitPromise1, timeoutPromise1]);
       
       // Success: Reset form and close modal
       setFolio('');
@@ -240,9 +260,10 @@ export default function LogBook() {
     setSelectedLogs(newSelection);
   };
 
+  const [confirmingLogDeletion, setConfirmingLogDeletion] = useState(false);
+
   const handleDeleteSelected = async () => {
     if (selectedLogs.size === 0) return;
-    if (!window.confirm(`¿Estás seguro de que deseas eliminar ${selectedLogs.size} registro(s)? Stock actual se revertirá.`)) return;
     
     setIsDeleting(true);
     try {
@@ -270,7 +291,9 @@ export default function LogBook() {
         });
       }
       
-      await batch.commit();
+      const commitPromise2 = batch.commit();
+      const timeoutPromise2 = new Promise((resolve) => setTimeout(resolve, 300));
+      await Promise.race([commitPromise2, timeoutPromise2]);
       setSelectedLogs(new Set());
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'logs');
@@ -335,28 +358,51 @@ export default function LogBook() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h2 className="text-lg font-medium text-gray-900">Historial de Salidas</h2>
+        <h2 className="text-lg font-medium text-gray-900 dark:text-white">Historial de Salidas</h2>
         <div className="grid grid-cols-2 md:flex items-center gap-2 w-full sm:w-auto">
           {selectedLogs.size > 0 && (
-            <button
-              onClick={handleDeleteSelected}
-              disabled={isDeleting}
-              className="col-span-2 md:col-span-1 flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 min-h-[44px]"
-            >
-              {isDeleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
-              Eliminar ({selectedLogs.size})
-            </button>
+            confirmingLogDeletion ? (
+              <div className="col-span-2 md:col-span-1 flex items-center gap-2 bg-red-50 dark:bg-red-950/20 px-3 py-2 rounded-lg border border-red-100 dark:border-red-900/30">
+                <span className="text-xs text-red-700 dark:text-red-400 font-bold truncate">¿Eliminar {selectedLogs.size}?</span>
+                <div className="flex gap-1 shrink-0">
+                  <button
+                    onClick={() => {
+                      handleDeleteSelected();
+                      setConfirmingLogDeletion(false);
+                    }}
+                    className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-md shadow-sm transition-colors"
+                  >
+                    Sí
+                  </button>
+                  <button
+                    onClick={() => setConfirmingLogDeletion(false)}
+                    className="px-3 py-1 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 font-medium text-xs rounded-md transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmingLogDeletion(true)}
+                disabled={isDeleting}
+                className="col-span-2 md:col-span-1 flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 dark:bg-red-600 hover:bg-red-700 dark:hover:bg-red-500 disabled:opacity-50 min-h-[44px]"
+              >
+                {isDeleting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                Eliminar ({selectedLogs.size})
+              </button>
+            )
           )}
           <button
             onClick={() => handleExportPDF(selectedMonthFilter !== 'all' ? selectedMonthFilter : undefined)}
-            className="flex items-center justify-center px-4 py-2.5 border border-gray-300 shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 hover:bg-red-700 min-h-[44px]"
+            className="flex items-center justify-center px-4 py-2.5 border border-gray-300 dark:border-gray-700 shadow-sm text-sm font-medium rounded-lg text-white bg-red-600 dark:bg-red-600 hover:bg-red-700 dark:hover:bg-red-500 min-h-[44px]"
           >
             <Download className="w-4 h-4 mr-2" />
             PDF
           </button>
           <button
             onClick={() => { setFolio(nextFolio); setIsModalOpen(true); }}
-            className="flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-bold rounded-lg text-white bg-blue-600 hover:bg-blue-700 min-h-[44px]"
+            className="flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-bold rounded-lg text-white bg-blue-600 dark:bg-blue-600 hover:bg-blue-700 dark:hover:bg-blue-500 min-h-[44px]"
           >
             <Plus className="w-4 h-4 mr-2" />
             Nueva Salida
@@ -364,10 +410,10 @@ export default function LogBook() {
         </div>
       </div>
 
-      <div className="overflow-hidden border border-gray-200 sm:rounded-lg bg-white">
-        <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row gap-4">
+      <div className="overflow-hidden border border-gray-200 dark:border-gray-800 sm:rounded-lg bg-white dark:bg-gray-900">
+        <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
@@ -377,14 +423,14 @@ export default function LogBook() {
               placeholder="Buscar por paciente, folio o medicamento..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm"
+              className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
             />
           </div>
           <div className="w-full sm:w-48">
             <select
               value={selectedMonthFilter}
               onChange={(e) => setSelectedMonthFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white text-sm outline-none"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm outline-none"
             >
               <option value="all">Todos los meses</option>
               {availableMonths.map(m => (
@@ -394,31 +440,31 @@ export default function LogBook() {
           </div>
         </div>
         {loading ? (
-          <div className="px-6 py-8 text-center text-gray-500">
+          <div className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
             <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
             Cargando registros...
           </div>
         ) : logs.length === 0 ? (
-          <div className="px-6 py-8 text-center text-gray-500">
+          <div className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
             No hay registros de salidas.
           </div>
         ) : (
           <div className="space-y-6">
             {monthKeysInOrder.map((monthKey) => (
-              <div key={monthKey} className="border-b border-gray-100 last:border-0">
-                <div className="bg-gray-50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200">
-                  <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">
+              <div key={monthKey} className="border-b border-gray-100 dark:border-gray-800 last:border-0">
+                <div className="bg-gray-50 dark:bg-gray-800/50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200 dark:border-gray-800">
+                  <span className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
                     {getMonthName(monthKey)}
                   </span>
                 </div>
                 <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-white">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+                    <thead className="bg-gray-50/50 dark:bg-gray-800/30">
                       <tr>
                         <th scope="col" className="px-4 py-3 text-left w-12 min-w-[48px]">
                           <input 
                             type="checkbox" 
-                            className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                            className="h-5 w-5 rounded border-gray-300 dark:border-gray-700 text-blue-600 bg-white dark:bg-gray-800 focus:ring-blue-500 cursor-pointer"
                             checked={groupedLogs[monthKey].every(l => selectedLogs.has(l.id))}
                             onChange={() => {
                               const newSelection = new Set(selectedLogs);
@@ -433,57 +479,57 @@ export default function LogBook() {
                             }}
                           />
                         </th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Núm.</th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Fechas</th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Clave</th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">D. Genérica</th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Presentación</th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Cant.</th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Paciente</th>
-                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Médico</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Núm.</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Fechas</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Clave</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">D. Genérica</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Presentación</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Cant.</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Paciente</th>
+                        <th scope="col" className="px-4 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Médico</th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                    <tbody className="bg-white dark:bg-transparent divide-y divide-gray-200 dark:divide-gray-800">
                       {groupedLogs[monthKey].map((l) => {
                         const med = medications.find(m => m.id === l.medicationId);
                         const dGenerica = med ? `${med.nombre}${med.descripcion ? ` - ${med.descripcion}` : ''}` : (l.denominacionGenerica || '-');
                         const pres = med ? med.presentacion : (l.presentacion || '-');
                         return (
-                          <tr key={l.id} className="hover:bg-gray-50 transition-colors">
+                          <tr key={l.id} className="hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
                             <td className="px-4 py-4 w-12 min-w-[48px]">
                               <input 
                                 type="checkbox" 
-                                className="h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                className="h-5 w-5 rounded border-gray-300 dark:border-gray-700 text-blue-600 bg-white dark:bg-gray-800 focus:ring-blue-500 cursor-pointer"
                                 checked={selectedLogs.has(l.id)}
                                 onChange={() => toggleSelection(l.id)}
                               />
                             </td>
-                            <td className="px-4 py-4 whitespace-nowrap text-sm font-bold text-blue-600">
+                            <td className="px-4 py-4 whitespace-nowrap text-sm font-bold text-blue-600 dark:text-blue-400">
                               {l.folio}
                             </td>
-                            <td className="px-4 py-4 text-sm text-gray-500 w-48 font-medium">
-                              {l.fechaIngreso && <div><span className="text-gray-400">Ing:</span> {formatDateWithMonthName(l.fechaIngreso)}</div>}
-                              <div><span className="text-blue-400">Egr:</span> {formatDateWithMonthName(l.fechaEgreso)}</div>
+                            <td className="px-4 py-4 text-sm text-gray-500 dark:text-gray-400 w-48 font-medium">
+                              {l.fechaIngreso && <div><span className="text-gray-400 dark:text-gray-500">Ing:</span> {formatDateWithMonthName(l.fechaIngreso)}</div>}
+                              <div><span className="text-blue-400 dark:text-blue-500">Egr:</span> {formatDateWithMonthName(l.fechaEgreso)}</div>
                             </td>
-                            <td className="px-4 py-4 text-sm font-bold text-gray-900 bg-gray-50/30">
+                            <td className="px-4 py-4 text-sm font-bold text-gray-900 dark:text-white bg-gray-50/30 dark:bg-gray-800/30">
                               {med ? med.clave : '-'}
                             </td>
-                            <td className="px-4 py-4 text-sm text-gray-900 font-medium">
+                            <td className="px-4 py-4 text-sm text-gray-900 dark:text-gray-200 font-medium">
                               {dGenerica}
                             </td>
-                            <td className="px-4 py-4 text-sm text-gray-500">
+                            <td className="px-4 py-4 text-sm text-gray-500 dark:text-gray-400">
                               {pres}
                             </td>
-                            <td className="px-4 py-4 whitespace-nowrap text-sm text-right font-black text-red-600">
+                            <td className="px-4 py-4 whitespace-nowrap text-sm text-right font-black text-red-600 dark:text-red-400">
                               -{l.cantidad}
                             </td>
-                            <td className="px-4 py-4 text-sm text-gray-900 font-medium capitalize">
-                              <div className="font-bold text-blue-800">{l.nombrePaciente || '-'}</div>
-                              <div className="text-[10px] text-gray-500">{l.paciente || '-'}</div>
+                            <td className="px-4 py-4 text-sm text-gray-900 dark:text-gray-100 font-medium capitalize">
+                              <div className="font-bold text-blue-800 dark:text-blue-300">{l.nombrePaciente || '-'}</div>
+                              <div className="text-[10px] text-gray-500 dark:text-gray-400">{l.paciente || '-'}</div>
                             </td>
-                            <td className="px-4 py-4 text-sm text-gray-600">
-                              <div className="font-medium text-gray-900">{l.nombreMedico || '-'}</div>
-                              {l.cedulaProfesional && <div className="text-[10px] text-gray-400">Céd: {l.cedulaProfesional}</div>}
+                            <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-400">
+                              <div className="font-medium text-gray-900 dark:text-white">{l.nombreMedico || '-'}</div>
+                              {l.cedulaProfesional && <div className="text-[10px] text-gray-400 dark:text-gray-500">Céd: {l.cedulaProfesional}</div>}
                             </td>
                           </tr>
                         );
@@ -507,34 +553,34 @@ export default function LogBook() {
       >
         <form onSubmit={handleSave} className="space-y-4">
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-red-700 text-sm">
+            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg flex items-start gap-2 text-red-700 dark:text-red-400 text-sm">
               <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
               <p>{error}</p>
             </div>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-b pb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-b dark:border-gray-800 pb-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Núm. Consecutivo (Sugerido: {nextFolio})</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Núm. Consecutivo (Sugerido: {nextFolio})</label>
               <input 
                 type="text" required 
                 value={folio} onChange={e => setFolio(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-gray-50" 
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white" 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Cantidad</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Cantidad</label>
               <input 
                 type="number" min="1" required 
                 value={cantidad} onChange={e => setCantidad(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
               />
             </div>
           </div>
 
           <div className="relative">
-            <label className="block text-sm font-medium text-gray-700">Buscar Medicamento (Nombre o Clave)</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Buscar Medicamento (Nombre o Clave)</label>
             <input 
               type="text" required 
               value={medSearch} 
@@ -543,26 +589,26 @@ export default function LogBook() {
                 setSelectedMed(null); // Clear selected med if user types
               }}
               placeholder="Escriba para buscar..."
-              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+              className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
             />
             {searchResults.length > 0 && (
-              <div className="absolute z-10 w-full mt-1 bg-white shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto sm:text-sm">
+              <div className="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 shadow-lg max-h-60 rounded-md py-1 text-base ring-1 ring-black ring-opacity-5 overflow-auto sm:text-sm border dark:border-gray-700">
                 {searchResults.map((m) => (
                   <button
                     key={m.id}
                     type="button"
                     onClick={() => handleMedSelect(m)}
-                    className="w-full text-left cursor-default select-none relative py-2 pl-3 pr-9 hover:bg-blue-50"
+                    className="w-full text-left cursor-default select-none relative py-2 pl-3 pr-9 hover:bg-blue-50 dark:hover:bg-blue-900/40"
                   >
-                    <span className="block truncate font-medium">{m.clave} - {m.nombre}</span>
-                    <span className="block truncate text-gray-500 text-xs">Stock: {m.stock_actual} | {m.presentacion}</span>
+                    <span className="block truncate font-medium text-gray-900 dark:text-white">{m.clave} - {m.nombre}</span>
+                    <span className="block truncate text-gray-500 dark:text-gray-400 text-xs">Stock: {m.stock_actual} | {m.presentacion}</span>
                   </button>
                 ))}
               </div>
             )}
             {selectedMed && (
                <div className="mt-2 space-y-2">
-                 <div className="text-xs text-green-600 bg-green-50 p-2 rounded flex justify-between">
+                 <div className="text-xs text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 p-2 rounded flex justify-between border border-green-100 dark:border-green-900/30">
                    <span>Medicamento seleccionado válido.</span>
                    <span className="font-bold">Stock disp: {selectedMed.stock_actual}</span>
                  </div>
@@ -570,8 +616,8 @@ export default function LogBook() {
                    <div className={cn(
                      "text-xs p-2 rounded flex justify-between border",
                      getExpirationStatus(selectedMed.fecha_caducidad) === 'expired' ? "bg-red-600 text-white font-black border-red-800" :
-                     getExpirationStatus(selectedMed.fecha_caducidad) === 'warning' ? "bg-amber-100 text-amber-800 font-bold border-amber-300" :
-                     "bg-blue-50 text-blue-700 border-blue-100"
+                     getExpirationStatus(selectedMed.fecha_caducidad) === 'warning' ? "bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 font-bold border-amber-300 dark:border-amber-800/50" :
+                     "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-100 dark:border-blue-900/30"
                    )}>
                      <span>Caducidad: {formatDateWithMonthName(selectedMed.fecha_caducidad)}</span>
                      <div className="text-right">
@@ -585,49 +631,49 @@ export default function LogBook() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Denominación Genérica</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Denominación Genérica</label>
               <input 
                 type="text" 
                 value={denominacionGenerica} onChange={e => setDenominacionGenerica(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-gray-50" 
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white" 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Presentación</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Presentación</label>
               <input 
                 type="text" 
                 value={presentacion} onChange={e => setPresentacion(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-gray-50" 
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white" 
               />
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Fecha Ingreso (Opcional)</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Fecha Ingreso (Opcional)</label>
               <input 
                 type="date"
                 value={fechaIngreso} onChange={e => setFechaIngreso(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Fecha Egreso</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Fecha Egreso</label>
               <input 
                 type="date" required
                 value={fechaEgreso} onChange={e => setFechaEgreso(e.target.value)}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
               />
             </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
              <div>
-               <label className="block text-sm font-medium text-gray-700">Dirigido a Paciente (Tipo)</label>
+               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Dirigido a Paciente (Tipo)</label>
                <select
                  value={paciente} 
                  onChange={e => setPaciente(e.target.value)}
-                 className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 bg-white border"
+                 className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 bg-white dark:bg-gray-800 border text-gray-900 dark:text-white"
                >
                  <option value="">Seleccione el tipo de paciente</option>
                  {PATIENT_TYPES.map(type => (
@@ -636,38 +682,38 @@ export default function LogBook() {
                </select>
              </div>
              <div>
-                <label className="block text-sm font-medium text-gray-700">Nombre del Paciente</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre del Paciente</label>
                 <input 
                   type="text"
                   value={nombrePaciente} onChange={e => setNombrePaciente(e.target.value)}
                   placeholder="Nombre completo"
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                  className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
                 />
              </div>
           </div>
 
-          <div className="border-t pt-4">
-             <h4 className="text-sm font-medium text-gray-900 mb-2">Información del Médico</h4>
+          <div className="border-t dark:border-gray-800 pt-4">
+             <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-2">Información del Médico</h4>
              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                <div>
-                  <label className="block text-sm font-medium text-gray-700">Nombre del Médico</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre del Médico</label>
                   <input 
                     type="text" required
                     list="doctors-list"
                     value={nombreMedico} onChange={e => setNombreMedico(e.target.value)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                    className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
                   />
                   <datalist id="doctors-list">
                     {uniqueDoctors.map(d => <option key={d} value={d} />)}
                   </datalist>
                </div>
                <div>
-                  <label className="block text-sm font-medium text-gray-700">Cédula Profesional</label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Cédula Profesional</label>
                   <input 
                     type="text" required
                     list="cedula-list"
                     value={cedulaProfesional} onChange={e => setCedulaProfesional(e.target.value)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                    className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
                   />
                   <datalist id="cedula-list">
                     {uniqueCedulas.map(c => <option key={c} value={c} />)}
@@ -675,12 +721,12 @@ export default function LogBook() {
                </div>
              </div>
              <div className="mt-2">
-                <label className="block text-sm font-medium text-gray-700">Domicilio</label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Domicilio</label>
                 <input 
                   type="text" required
                   list="domicilio-list"
                   value={domicilio} onChange={e => setDomicilio(e.target.value)}
-                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border" 
+                  className="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border bg-white dark:bg-gray-800 text-gray-900 dark:text-white" 
                 />
                 <datalist id="domicilio-list">
                    {uniqueDomicilios.map(d => <option key={d} value={d} />)}
@@ -692,14 +738,14 @@ export default function LogBook() {
             <button
               type="button"
               onClick={() => setIsModalOpen(false)}
-              className="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+              className="px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-md shadow-sm text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={isSaving || !selectedMed}
-              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 dark:bg-blue-600 hover:bg-blue-700 dark:hover:bg-blue-500 focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
             >
               {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
               {isSaving ? 'Registrando...' : 'Guardar Salida'}

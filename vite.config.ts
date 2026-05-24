@@ -8,23 +8,53 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      injectRegister: 'auto',
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}']
-      },
+      includeAssets: ['logo.svg', 'favicon.ico', 'robots.txt', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Botica Cessa Pinos',
-        short_name: 'Botica',
-        description: 'Sistema de gestión para Botica Cessa Pinos',
-        theme_color: '#3b82f6',
-        background_color: '#ffffff',
+        name: 'Control Botica Cessa Pinos',
+        short_name: 'Botica Pinos',
+        description: 'Sistema Integral para el Control de Inventarios y Bitácora de Antibióticos',
+        theme_color: '#2563eb',
+        background_color: '#f8fafc',
         display: 'standalone',
+        orientation: 'portrait',
+        scope: '/',
+        start_url: '/',
         icons: [
           {
             src: 'logo.svg',
-            sizes: 'any',
+            sizes: '192x192',
+            type: 'image/svg+xml'
+          },
+          {
+            src: 'logo.svg',
+            sizes: '512x512',
+            type: 'image/svg+xml'
+          },
+          {
+            src: 'logo.svg',
+            sizes: '512x512',
             type: 'image/svg+xml',
             purpose: 'any maskable'
+          }
+        ]
+      },
+      workbox: {
+        cleanupOutdatedCaches: true,
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-cache',
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60 * 24 * 365 // <== 365 days
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
           }
         ]
       }

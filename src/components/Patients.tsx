@@ -4,12 +4,16 @@ import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { PatientRecord, Medication } from '../types';
 import { Plus, User, AlertCircle, Loader2, Download, Search, Edit, Calendar } from 'lucide-react';
 import Modal from './Modal';
-import { cn, formatDateWithMonthName, getLocalDateString, getExpirationStatus, getTimeRemainingMessage } from '../lib/utils';
+import { cn, formatDateWithMonthName, getLocalDateString, getExpirationStatus, getTimeRemainingMessage, parseLocalDate } from '../lib/utils';
 import { PATIENT_TYPES } from '../constants';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-export default function Patients() {
+interface PatientsProps {
+  systemId: string;
+}
+
+export default function Patients({ systemId }: PatientsProps) {
   const [records, setRecords] = useState<PatientRecord[]>([]);
   const [medications, setMedications] = useState<Medication[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,10 +55,13 @@ export default function Patients() {
     let recordsLoaded = false;
 
     const unsubscribeRecords = onSnapshot(qRecords, (snapshot) => {
-      const recordsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as PatientRecord[];
+      const recordsData: PatientRecord[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.systemId === systemId) {
+          recordsData.push({ id: doc.id, ...data } as PatientRecord);
+        }
+      });
       setRecords(recordsData);
       recordsLoaded = true;
       if (medsLoaded && recordsLoaded) setLoading(false);
@@ -65,10 +72,13 @@ export default function Patients() {
 
     const qMeds = query(collection(db, 'medications'), orderBy('nombre'));
     const unsubscribeMeds = onSnapshot(qMeds, (snapshot) => {
-      const medsData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Medication[];
+      const medsData: Medication[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.activo !== false && data.systemId === systemId) {
+          medsData.push({ id: doc.id, ...data } as Medication);
+        }
+      });
       setMedications(medsData);
       medsLoaded = true;
       if (medsLoaded && recordsLoaded) setLoading(false);
@@ -80,7 +90,7 @@ export default function Patients() {
       unsubscribeRecords();
       unsubscribeMeds();
     };
-  }, []);
+  }, [systemId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -160,6 +170,7 @@ export default function Patients() {
           medicationId: selectedMed ? selectedMed.id : null,
           cantidad: qty,
           notas: formData.notas.trim() || null,
+          systemId,
           createdAt: serverTimestamp()
         });
 
@@ -171,7 +182,9 @@ export default function Patients() {
         }
       }
 
-      await batch.commit();
+      const commitPromise = batch.commit();
+      const timeoutPromise = new Promise((resolve) => setTimeout(resolve, 300));
+      await Promise.race([commitPromise, timeoutPromise]);
       
       // Success: Reset state and close modal
       setEditingId(null);
@@ -309,6 +322,9 @@ export default function Patients() {
     if (typeof maybeTimestamp.toDate === 'function') {
       return maybeTimestamp.toDate();
     }
+    if (typeof d === 'string' && d.includes('-')) {
+      return parseLocalDate(d);
+    }
     const date = new Date(d as string | number);
     return isNaN(date.getTime()) ? new Date() : date;
   };
@@ -360,22 +376,22 @@ export default function Patients() {
     <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <div className="md:px-4">
-            <h2 className="text-xl font-bold text-gray-900">Sin Expediente</h2>
-            <p className="text-sm text-gray-500">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white">Sin Expediente</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               Control de medicamentos dispensados y alertas de pacientes frecuentes.
             </p>
           </div>
           <div className="grid grid-cols-2 md:flex w-full sm:w-auto gap-2">
             <button
               onClick={() => handleExport(selectedMonthFilter !== 'all' ? selectedMonthFilter : undefined)}
-              className="flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 min-h-[44px]"
+              className="flex items-center justify-center gap-2 px-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700 min-h-[44px]"
             >
-              <Download className="w-4 h-4 text-red-600" />
+              <Download className="w-4 h-4 text-red-600 dark:text-red-400" />
               PDF
             </button>
             <button
               onClick={() => setIsModalOpen(true)}
-              className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors min-h-[44px]"
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 dark:bg-blue-600 text-white rounded-lg text-sm font-bold hover:bg-blue-700 dark:hover:bg-blue-500 transition-colors min-h-[44px]"
             >
               <Plus className="w-4 h-4" />
               <span className="hidden sm:inline">Nuevo Registro</span>
@@ -384,23 +400,23 @@ export default function Patients() {
           </div>
         </div>
 
-      <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-        <div className="p-4 border-b border-gray-200 flex flex-col sm:flex-row gap-4">
+      <div className="bg-white dark:bg-gray-900 rounded-lg shadow-sm border border-gray-200 dark:border-gray-800">
+        <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex flex-col sm:flex-row gap-4">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 dark:text-gray-500" />
             <input
               type="text"
               placeholder="Buscar por paciente o medicamento..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm"
+              className="w-full pl-9 pr-4 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
             />
           </div>
           <div className="w-full sm:w-48">
             <select
               value={selectedMonthFilter}
               onChange={(e) => setSelectedMonthFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white text-sm outline-none"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm outline-none"
             >
               <option value="all">Todos los meses</option>
               {availableMonths.map(m => (
@@ -411,53 +427,53 @@ export default function Patients() {
         </div>
         <div className="overflow-x-auto">
           {loading ? (
-            <div className="px-6 py-8 text-center text-gray-500">
+            <div className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
               <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
               Cargando registros...
             </div>
           ) : filteredRecords.length === 0 ? (
-            <div className="px-6 py-8 text-center text-gray-500">
-              <User className="w-8 h-8 mx-auto mb-2 text-gray-400" />
+            <div className="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
+              <User className="w-8 h-8 mx-auto mb-2 text-gray-400 dark:text-gray-600" />
               <p>No se encontraron registros</p>
             </div>
           ) : (
             <div className="space-y-4">
               {monthKeysInOrder.map((monthKey) => (
-                <div key={monthKey} className="border-b border-gray-100 last:border-0">
-                  <div className="bg-gray-50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200">
-                    <span className="text-xs font-bold text-blue-600 uppercase tracking-wider">
+                <div key={monthKey} className="border-b border-gray-100 dark:border-gray-800 last:border-0">
+                  <div className="bg-gray-50 dark:bg-gray-800/50 px-6 py-3 flex justify-between items-center sticky top-0 z-10 border-y border-gray-200 dark:border-gray-800">
+                    <span className="text-xs font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
                       {getMonthName(monthKey)}
                     </span>
                   </div>
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-white">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+                    <thead className="bg-gray-50/50 dark:bg-gray-800/30">
                       <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32 font-bold">Fecha / Tipo</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider font-bold">Expediente</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider font-bold">Paciente</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider font-bold">Medicamento</th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider font-bold">Notas</th>
-                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider font-bold">Acciones</th>
+                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider w-32">Fecha / Tipo</th>
+                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Expediente</th>
+                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Paciente</th>
+                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Medicamento</th>
+                        <th className="px-6 py-3 text-left text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Notas</th>
+                        <th className="px-6 py-3 text-right text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Acciones</th>
                       </tr>
                     </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
+                    <tbody className="bg-white dark:bg-transparent divide-y divide-gray-200 dark:divide-gray-800">
                       {groupedRecords[monthKey].map((r) => {
                         const patientGroup = patientRecordsGrouped[r.nombreCompleto.toLowerCase()];
                         const isRepeated = patientGroup && patientGroup.length >= 3;
                         return (
-                          <tr key={r.id} className={cn(isRepeated && "bg-amber-50/50 hover:bg-amber-100/50 transition-colors", !isRepeated && "hover:bg-gray-50 transition-colors")}>
-                            <td className="px-6 py-4 text-sm text-gray-900 border-r border-gray-100">
-                              <div className="font-medium text-gray-900">
+                          <tr key={r.id} className={cn(isRepeated && "bg-amber-50/50 dark:bg-amber-900/10 hover:bg-amber-100/50 dark:hover:bg-amber-900/20 transition-colors", !isRepeated && "hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors")}>
+                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-100 border-r border-gray-100 dark:border-gray-800">
+                              <div className="font-medium text-gray-900 dark:text-white">
                                 {parseDate(r.fecha).toLocaleDateString('es-MX', { day: 'numeric', weekday: 'short' })}
                               </div>
-                              <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-[10px] font-bold bg-blue-100 text-blue-800">
+                              <span className="inline-flex items-center px-2 py-0.5 mt-1 rounded text-[10px] font-bold bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300">
                                 {r.tipoPaciente}
                               </span>
                             </td>
-                            <td className="px-6 py-4 text-sm text-gray-900 font-mono font-bold text-blue-600">
+                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-white font-mono font-bold text-blue-600 dark:text-blue-400">
                               {r.expediente || 'S/N'}
                             </td>
-                            <td className="px-6 py-4 text-sm text-gray-900">
+                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-200">
                               <div className="font-bold flex items-center gap-2 capitalize">
                                 {r.nombreCompleto}
                                 {isRepeated && (
@@ -469,20 +485,20 @@ export default function Patients() {
                                         setIsAlertModalOpen(true);
                                       }
                                     }}
-                                    className="text-amber-500 hover:text-amber-700 transition-colors focus:outline-none"
+                                    className="text-amber-500 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 transition-colors focus:outline-none"
                                     title="Ver detalles de dispensación múltiple"
                                   >
                                     <AlertCircle className="w-4 h-4" />
                                   </button>
                                 )}
                               </div>
-                              <div className="text-gray-500 text-xs mt-1">Origen: {r.origen || '-'}</div>
+                              <div className="text-gray-500 dark:text-gray-400 text-xs mt-1">Origen: {r.origen || '-'}</div>
                             </td>
-                            <td className="px-6 py-4 text-sm text-gray-900">
-                              <div className="font-medium text-gray-900 leading-tight">{r.medicamento}</div>
-                              <div className="text-gray-500 text-xs mt-1">Cantidad: <span className="font-bold text-blue-600">{r.cantidad}</span></div>
+                            <td className="px-6 py-4 text-sm text-gray-900 dark:text-gray-200">
+                              <div className="font-medium text-gray-900 dark:text-white leading-tight">{r.medicamento}</div>
+                              <div className="text-gray-500 dark:text-gray-400 text-xs mt-1">Cantidad: <span className="font-bold text-blue-600 dark:text-blue-400">{r.cantidad}</span></div>
                             </td>
-                            <td className="px-6 py-4 text-sm text-gray-500 max-w-xs whitespace-pre-wrap italic">
+                            <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400 max-w-xs whitespace-pre-wrap italic">
                               {r.notas || '-'}
                             </td>
                             <td className="px-6 py-4 text-sm text-right whitespace-nowrap min-w-[60px]">
@@ -509,7 +525,7 @@ export default function Patients() {
                                   }
                                   setIsModalOpen(true);
                                 }}
-                                className="text-blue-600 hover:text-blue-900 transition-colors bg-blue-50 p-3 rounded-lg sm:p-2 sm:bg-blue-50"
+                                className="text-blue-600 dark:text-blue-400 hover:text-blue-900 dark:hover:text-blue-300 transition-colors bg-blue-50 dark:bg-blue-900/30 p-3 rounded-lg sm:p-2 sm:bg-blue-50 sm:dark:bg-blue-900/40"
                                 title="Editar registro"
                               >
                                 <Edit className="w-5 h-5 sm:w-4 sm:h-4" />
@@ -534,33 +550,33 @@ export default function Patients() {
       >
         {selectedAlertPatient && (
           <div className="space-y-4">
-            <div className="bg-amber-50 p-4 rounded-lg border border-amber-200 flex items-start gap-3">
-              <AlertCircle className="w-5 h-5 text-amber-500 mt-0.5 flex-shrink-0" />
+            <div className="bg-amber-50 dark:bg-amber-900/20 p-4 rounded-lg border border-amber-200 dark:border-amber-800/50 flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-500 dark:text-amber-400 mt-0.5 flex-shrink-0" />
               <div>
-                <p className="text-sm text-amber-800">
+                <p className="text-sm text-amber-800 dark:text-amber-300">
                   El paciente <span className="font-bold capitalize">{selectedAlertPatient.originalName}</span> ha recibido medicamentos <span className="font-bold">{selectedAlertPatient.count} veces</span>, superando el límite sugerido.
                 </p>
               </div>
             </div>
 
-            <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
-              <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-medium text-gray-700 text-sm">
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm overflow-hidden">
+              <div className="bg-gray-50 dark:bg-gray-900/50 px-4 py-3 border-b border-gray-200 dark:border-gray-700 font-medium text-gray-700 dark:text-gray-300 text-sm">
                 Historial de Medicamentos Entregados
               </div>
               <div className="max-h-[300px] overflow-y-auto p-4 space-y-4">
                 {selectedAlertPatient.records.map((r, i) => (
-                  <div key={r.id || i} className="border-l-2 border-blue-500 pl-3">
+                  <div key={r.id || i} className="border-l-2 border-blue-500 dark:border-blue-400 pl-3">
                     <div className="flex justify-between items-start">
                       <div>
-                        <div className="font-semibold text-sm text-gray-900">{formatDateWithMonthName(r.fecha)}</div>
-                        <div className="text-xs text-blue-600 font-medium">{r.tipoPaciente}</div>
+                        <div className="font-semibold text-sm text-gray-900 dark:text-white">{formatDateWithMonthName(r.fecha)}</div>
+                        <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">{r.tipoPaciente}</div>
                       </div>
-                      <div className="bg-gray-100 text-gray-800 text-xs px-2 py-1 rounded font-medium">
+                      <div className="bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-200 text-xs px-2 py-1 rounded font-medium">
                         {r.origen || 'Sin origen'}
                       </div>
                     </div>
-                    <div className="mt-2 text-sm text-gray-700 truncate" title={r.medicamento}>
-                      {r.medicamento} <span className="font-semibold text-blue-600 ml-1">x{r.cantidad}</span>
+                    <div className="mt-2 text-sm text-gray-700 dark:text-gray-300 truncate" title={r.medicamento}>
+                      {r.medicamento} <span className="font-semibold text-blue-600 dark:text-blue-400 ml-1">x{r.cantidad}</span>
                     </div>
                   </div>
                 ))}
@@ -570,7 +586,7 @@ export default function Patients() {
             <div className="flex justify-end pt-4">
               <button
                 onClick={() => setIsAlertModalOpen(false)}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700"
               >
                 Cerrar
               </button>
@@ -589,14 +605,14 @@ export default function Patients() {
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2 text-red-700 text-sm animate-in fade-in slide-in-from-top-2">
+            <div className="p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg flex items-start gap-2 text-red-700 dark:text-red-400 text-sm animate-in fade-in slide-in-from-top-2">
               <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <p>{error}</p>
             </div>
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Fecha
               </label>
               <input
@@ -604,18 +620,18 @@ export default function Patients() {
                 required
                 value={formData.fecha}
                 onChange={e => setFormData({...formData, fecha: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Tipo de Paciente
               </label>
               <select
                 required
                 value={formData.tipoPaciente}
                 onChange={e => setFormData({...formData, tipoPaciente: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
               >
                 {PATIENT_TYPES.map(type => (
                   <option key={type} value={type}>{type}</option>
@@ -626,7 +642,7 @@ export default function Patients() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Nombre Completo
               </label>
               <input
@@ -635,7 +651,7 @@ export default function Patients() {
                 list="patient-names"
                 value={formData.nombreCompleto}
                 onChange={e => setFormData({...formData, nombreCompleto: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                 placeholder="Ej. Juan Pérez García"
               />
               <datalist id="patient-names">
@@ -643,7 +659,7 @@ export default function Patients() {
               </datalist>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 No. Expediente
               </label>
               <input
@@ -651,14 +667,14 @@ export default function Patients() {
                 required
                 value={formData.expediente}
                 onChange={e => setFormData({...formData, expediente: e.target.value})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                 placeholder="Introducir número..."
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               De dónde viene (Origen/Domicilio)
             </label>
             <input
@@ -667,7 +683,7 @@ export default function Patients() {
               list="patient-origins"
               value={formData.origen}
               onChange={e => setFormData({...formData, origen: e.target.value})}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
               placeholder="Ej. Colonia Centro"
             />
             <datalist id="patient-origins">
@@ -678,7 +694,7 @@ export default function Patients() {
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div className="sm:col-span-3">
               <div className="relative">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Medicamento(s)
                 </label>
                 <input
@@ -689,16 +705,18 @@ export default function Patients() {
                     setMedSearch(e.target.value);
                     if (selectedMed) setSelectedMed(null);
                   }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                   placeholder="Buscar medicamento por nombre o clave..."
                 />
                 
                 {medSearch && !selectedMed && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-60 overflow-y-auto">
+                  <div className="absolute z-10 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
                     {medications.filter(m => 
-                      m.nombre.toLowerCase().includes(medSearch.toLowerCase()) || 
-                      m.clave.toLowerCase().includes(medSearch.toLowerCase()) ||
-                      (m.descripcion && m.descripcion.toLowerCase().includes(medSearch.toLowerCase()))
+                      (m.activo !== false) && (
+                        m.nombre.toLowerCase().includes(medSearch.toLowerCase()) || 
+                        m.clave.toLowerCase().includes(medSearch.toLowerCase()) ||
+                        (m.descripcion && m.descripcion.toLowerCase().includes(medSearch.toLowerCase()))
+                      )
                     ).slice(0, 10).map(m => (
                       <button
                         key={m.id}
@@ -707,10 +725,10 @@ export default function Patients() {
                           setSelectedMed(m);
                           setMedSearch(`[${m.clave}] ${m.nombre}`);
                         }}
-                        className="w-full text-left px-4 py-2 hover:bg-gray-50 focus:bg-gray-50 outline-none border-b border-gray-100 last:border-0"
+                        className="w-full text-left px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 focus:bg-gray-50 dark:focus:bg-gray-700 outline-none border-b border-gray-100 dark:border-gray-700 last:border-0"
                       >
-                        <div className="font-medium text-gray-900">[{m.clave}] {m.nombre}</div>
-                        <div className="text-xs text-gray-500">
+                        <div className="font-medium text-gray-900 dark:text-white">[{m.clave}] {m.nombre}</div>
+                        <div className="text-xs text-gray-500 dark:text-gray-400">
                           Stock: {m.stock_actual} | {m.presentacion || 'Sin presentación'}
                         </div>
                       </button>
@@ -720,7 +738,7 @@ export default function Patients() {
                       m.clave.toLowerCase().includes(medSearch.toLowerCase()) ||
                       (m.descripcion && m.descripcion.toLowerCase().includes(medSearch.toLowerCase()))
                     ).length === 0 && (
-                      <div className="px-4 py-3 text-sm text-gray-500 text-center">
+                      <div className="px-4 py-3 text-sm text-gray-500 dark:text-gray-400 text-center">
                         No se encontraron medicamentos
                       </div>
                     )}
@@ -728,18 +746,18 @@ export default function Patients() {
                 )}
                 {selectedMed && (
                   <div className="mt-2 space-y-2">
-                    <div className="text-sm text-blue-600 flex items-center justify-between bg-blue-50 p-2 rounded border border-blue-100">
+                    <div className="text-sm text-blue-600 dark:text-blue-400 flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 p-2 rounded border border-blue-100 dark:border-blue-900/30">
                       <span>Stock disponible: <strong>{selectedMed.stock_actual}</strong></span>
                       {selectedMed.stock_actual <= 0 && (
-                        <span className="text-red-500 font-bold">¡Sin stock!</span>
+                        <span className="text-red-500 dark:text-red-400 font-bold">¡Sin stock!</span>
                       )}
                     </div>
                     {selectedMed.fecha_caducidad && (
                       <div className={cn(
                         "text-xs p-2 rounded flex items-center justify-between border",
                         getExpirationStatus(selectedMed.fecha_caducidad) === 'expired' ? "bg-red-600 text-white font-black border-red-800" :
-                        getExpirationStatus(selectedMed.fecha_caducidad) === 'warning' ? "bg-amber-100 text-amber-800 font-bold border-amber-300" :
-                        "bg-blue-50 text-blue-700 border-blue-100"
+                        getExpirationStatus(selectedMed.fecha_caducidad) === 'warning' ? "bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 font-bold border-amber-300 dark:border-amber-800/50" :
+                        "bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-100 dark:border-blue-900/30"
                       )}>
                         <div className="flex items-center gap-1">
                           <Calendar className="w-3 h-3" />
@@ -747,7 +765,7 @@ export default function Patients() {
                         </div>
                         <div className="text-right">
                           <div className="font-bold">{getTimeRemainingMessage(selectedMed.fecha_caducidad)}</div>
-                          {getExpirationStatus(selectedMed.fecha_caducidad) === 'expired' && <span className="uppercase text-[9px] bg-white text-red-600 px-1 rounded block mt-0.5">Retirar del Stock</span>}
+                          {getExpirationStatus(selectedMed.fecha_caducidad) === 'expired' && <span className="uppercase text-[9px] bg-white dark:bg-gray-200 text-red-600 px-1 rounded block mt-0.5">Retirar del Stock</span>}
                         </div>
                       </div>
                     )}
@@ -756,7 +774,7 @@ export default function Patients() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Cantidad
               </label>
               <input
@@ -765,13 +783,13 @@ export default function Patients() {
                 required
                 value={formData.cantidad}
                 onChange={e => setFormData({...formData, cantidad: Number(e.target.value)})}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
               />
             </div>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
               Notas Adicionales (Opcional)
             </label>
             <textarea
@@ -781,12 +799,12 @@ export default function Patients() {
                 e.target.style.height = 'auto';
                 e.target.style.height = e.target.scrollHeight + 'px';
               }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-[80px] overflow-hidden"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none min-h-[80px] overflow-hidden bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
               placeholder="Algún comentario sobre la entrega o el paciente..."
             ></textarea>
           </div>
 
-          <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
+          <div className="flex justify-end gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">
             <button
               type="button"
               onClick={() => {
@@ -805,14 +823,14 @@ export default function Patients() {
                 setMedSearch('');
                 setSelectedMed(null);
               }}
-              className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 rounded-lg transition-colors border border-gray-300"
+              className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 rounded-lg transition-colors border border-gray-300 dark:border-gray-700"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 dark:bg-blue-600 hover:bg-blue-700 dark:hover:bg-blue-500 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
             >
               {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
               {saving ? 'Guardando...' : (editingId ? 'Actualizar Registro' : 'Guardar Registro')}

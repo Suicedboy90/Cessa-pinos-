@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { Medication } from '../types';
 import { Download, Loader2, PieChart } from 'lucide-react';
+import { parseLocalDate } from '../lib/utils';
 import * as xlsx from 'xlsx';
 
 interface LogRecord {
@@ -14,7 +15,7 @@ interface LogRecord {
   [key: string]: unknown;
 }
 
-export default function MonthlyReport() {
+export default function MonthlyReport({ systemId }: { systemId: string }) {
   const [medications, setMedications] = useState<Medication[]>([]);
   const [allLogs, setAllLogs] = useState<LogRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -26,7 +27,10 @@ export default function MonthlyReport() {
     const unsubscribeMeds = onSnapshot(qMeds, (snapshot) => {
       const meds: Medication[] = [];
       snapshot.forEach((d) => {
-        meds.push({ id: d.id, ...d.data() } as Medication);
+        const data = d.data();
+        if (data.activo !== false && data.systemId === systemId) {
+          meds.push({ id: d.id, ...data } as Medication);
+        }
       });
       setMedications(meds);
     }, (error) => {
@@ -34,29 +38,35 @@ export default function MonthlyReport() {
     });
 
     const unsubscribePatients = onSnapshot(collection(db, 'patientsRegistry'), (snapshot) => {
-      const records = snapshot.docs.map(d => {
+      const records: LogRecord[] = [];
+      snapshot.forEach((d) => {
         const data = d.data();
-        return { 
-          id: d.id, 
-          ...data,
-          medicationId: data.medicationId,
-          cantidad: data.cantidad,
-          type: 'patient' as const, 
-          dateField: data.fecha || data.createdAt 
-        };
-      });
-      
-      const unsubscribeLogs = onSnapshot(collection(db, 'logs'), (logSnapshot) => {
-        const logs = logSnapshot.docs.map(d => {
-          const data = d.data();
-          return { 
+        if (data.systemId === systemId) {
+          records.push({ 
             id: d.id, 
             ...data,
             medicationId: data.medicationId,
             cantidad: data.cantidad,
-            type: 'log' as const, 
-            dateField: data.fechaEgreso || data.createdAt 
-          };
+            type: 'patient' as const, 
+            dateField: data.fecha || data.createdAt 
+          } as LogRecord);
+        }
+      });
+      
+      const unsubscribeLogs = onSnapshot(collection(db, 'logs'), (logSnapshot) => {
+        const logs: LogRecord[] = [];
+        logSnapshot.forEach((d) => {
+          const data = d.data();
+          if (data.systemId === systemId) {
+            logs.push({ 
+              id: d.id, 
+              ...data,
+              medicationId: data.medicationId,
+              cantidad: data.cantidad,
+              type: 'log' as const, 
+              dateField: data.fechaEgreso || data.createdAt 
+            } as LogRecord);
+          }
         });
         
         setAllLogs([...records, ...logs] as LogRecord[]);
@@ -77,13 +87,16 @@ export default function MonthlyReport() {
       unsubscribeMeds();
       unsubscribePatients();
     };
-  }, []);
+  }, [systemId]);
 
   const parseDate = (d: unknown): Date => {
     if (!d) return new Date();
     const maybeTimestamp = d as { toDate?: () => Date };
     if (typeof maybeTimestamp.toDate === 'function') {
       return maybeTimestamp.toDate();
+    }
+    if (typeof d === 'string' && d.includes('-')) {
+      return parseLocalDate(d);
     }
     const date = new Date(d as string | number);
     return isNaN(date.getTime()) ? new Date() : date;
@@ -175,7 +188,7 @@ export default function MonthlyReport() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between px-2 sm:px-0">
-        <h2 className="text-lg font-bold text-gray-900 inline-flex items-center">
+        <h2 className="text-lg font-bold text-gray-900 dark:text-white inline-flex items-center">
           <PieChart className="w-5 h-5 mr-2 text-blue-500" />
           Kárdex y Movimientos
         </h2>
@@ -183,7 +196,7 @@ export default function MonthlyReport() {
           <select
             value={selectedMonthFilter}
             onChange={(e) => setSelectedMonthFilter(e.target.value)}
-            className="w-full sm:w-48 rounded-lg border-gray-300 text-sm focus:ring-blue-500 focus:border-blue-500 min-h-[44px]"
+            className="w-full sm:w-48 rounded-lg border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm focus:ring-blue-500 focus:border-blue-500 min-h-[44px]"
           >
             <option value="all">Todos los meses</option>
             {availableMonths.map(month => (
@@ -194,7 +207,7 @@ export default function MonthlyReport() {
           </select>
           <button
             onClick={handleExportExcel}
-            className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2.5 border border-gray-300 shadow-sm text-sm font-bold rounded-lg text-white bg-green-600 hover:bg-green-700 min-h-[44px]"
+            className="w-full sm:w-auto inline-flex items-center justify-center px-4 py-2.5 border border-transparent shadow-sm text-sm font-bold rounded-lg text-white bg-green-600 dark:bg-green-600 hover:bg-green-700 dark:hover:bg-green-500 min-h-[44px]"
           >
             <Download className="w-4 h-4 mr-2" />
             Descargar Excel
@@ -204,50 +217,50 @@ export default function MonthlyReport() {
 
       <div className="space-y-8">
         {medications.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-lg p-12 text-center text-gray-500">
+          <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg p-12 text-center text-gray-500 dark:text-gray-400">
             No hay medicamentos registrados o actividad en este periodo.
           </div>
         ) : Object.entries(groupedData).map(([month, meds]) => (
-          <div key={month} className="bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
-            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
-              <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">{month}</h3>
-              <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100 shadow-sm">
+          <div key={month} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden shadow-sm">
+            <div className="bg-gray-50 dark:bg-gray-800/50 px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
+              <h3 className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">{month}</h3>
+              <span className="text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20 px-2.5 py-1 rounded-full border border-blue-100 dark:border-blue-900/30 shadow-sm">
                 {meds.length} productos con movimiento o stock
               </span>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50/50">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+                <thead className="bg-gray-50/50 dark:bg-gray-800/30">
                   <tr>
-                    <th scope="col" className="px-6 py-3 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider">Clave / Nombre</th>
-                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wider">Ex. Pasado</th>
-                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-gray-400 uppercase tracking-wider">Surtido</th>
-                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-blue-600 uppercase tracking-wider">Disp. Total (Mes)</th>
-                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-red-600 uppercase tracking-wider">Salidas (Bitácora)</th>
-                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-gray-900 uppercase tracking-wider">Stock Físico (Final)</th>
+                    <th scope="col" className="px-6 py-3 text-left text-[10px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Clave / Nombre</th>
+                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Ex. Pasado</th>
+                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-gray-400 dark:text-gray-500 uppercase tracking-wider">Surtido</th>
+                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-wider">Disp. Total (Mes)</th>
+                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-red-600 dark:text-red-400 uppercase tracking-wider">Salidas (Bitácora)</th>
+                    <th scope="col" className="px-6 py-3 text-right text-[10px] font-bold text-gray-900 dark:text-white uppercase tracking-wider">Stock Físico (Final)</th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-white dark:bg-transparent divide-y divide-gray-200 dark:divide-gray-800">
                   {meds.map((m) => {
                     return (
-                      <tr key={m.id} className="hover:bg-blue-50/30 transition-colors">
-                        <td className="px-6 py-4 text-sm text-gray-900">
-                          <div className="font-bold text-gray-800">{m.clave}</div>
-                          <div className="text-gray-500 text-[11px] leading-tight mt-0.5 line-clamp-1">{m.nombre}</div>
+                      <tr key={m.id} className="hover:bg-blue-50/30 dark:hover:bg-blue-900/20 transition-colors">
+                        <td className="px-6 py-4 text-sm text-gray-900 dark:text-white font-medium">
+                          <div className="font-bold text-gray-800 dark:text-gray-200">{m.clave}</div>
+                          <div className="text-gray-500 dark:text-gray-400 text-[11px] leading-tight mt-0.5 line-clamp-1">{m.nombre}</div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-400 font-medium">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-400 dark:text-gray-500 font-medium">
                           {m.existencia_mes_pasado || 0}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-400 font-medium">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-gray-400 dark:text-gray-500 font-medium">
                           {m.surtido || 0}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-blue-700 bg-blue-50/20">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right font-bold text-blue-700 dark:text-blue-400 bg-blue-50/20 dark:bg-blue-900/10">
                           {m.calculatedDisponible}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-red-600 font-black">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-red-600 dark:text-red-400 font-bold">
                           {m.calculatedSalidas > 0 ? `-${m.calculatedSalidas}` : '0'}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-black text-gray-900 bg-gray-50/50">
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-black text-gray-900 dark:text-white bg-gray-50/50 dark:bg-gray-800/40">
                           {m.stock_actual}
                         </td>
                       </tr>
